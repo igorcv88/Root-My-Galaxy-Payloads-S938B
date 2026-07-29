@@ -42,30 +42,44 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 36, NDK r29 and CMake
+      - name: Install Android SDK 37 preview, NDK r29 and CMake
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          # API 37 is currently distributed through the Android preview channels.
+          sdkmanager "cmdline-tools;latest" --channel=3
+          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
           SDK_LIST="$(mktemp)"
-          sdkmanager --list > "$SDK_LIST"
-          NDK_PACKAGE="$(awk '/^[[:space:]]*ndk;29\./ { print $1; exit }' "$SDK_LIST")"
+          "$SDKMANAGER" --list --channel=3 > "$SDK_LIST"
+
+          PLATFORM_PACKAGE="$(awk '/^[[:space:]]*platforms;android-37[[:space:]]/ { print $1; exit }' "$SDK_LIST")"
+          if [ -z "$PLATFORM_PACKAGE" ]; then
+            echo "Android API 37 was not reported by sdkmanager channel 3." >&2
+            grep -E '^[[:space:]]*platforms;android-' "$SDK_LIST" | tail -30 || true
+            exit 1
+          fi
+
+          NDK_PACKAGE="$(awk '/^[[:space:]]*ndk;29\./ { print $1 }' "$SDK_LIST" | sort -V | tail -1)"
           if [ -z "$NDK_PACKAGE" ]; then
             echo "No Android NDK r29 package was reported by sdkmanager." >&2
             grep -E '^[[:space:]]*ndk;' "$SDK_LIST" || true
             exit 1
           fi
 
-          sdkmanager \
+          "$SDKMANAGER" \
             "platform-tools" \
-            "platforms;android-36" \
+            "$PLATFORM_PACKAGE" \
             "build-tools;36.0.0" \
             "$NDK_PACKAGE" \
-            "cmake;3.22.1"
+            "cmake;3.22.1" \
+            --channel=3
 
           NDK_VERSION="${NDK_PACKAGE#ndk;}"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "Resolved Android platform: ${PLATFORM_PACKAGE}"
           echo "Resolved Android NDK: ${NDK_PACKAGE}"
 
       - name: Build firmware-specific exploit payload
@@ -185,7 +199,6 @@ jobs:
           build_text = gradle.read_text(encoding="utf-8")
           if "compileSdk = 37" not in build_text:
               raise SystemExit("app/build.gradle.kts no longer has compileSdk = 37")
-          build_text = build_text.replace("compileSdk = 37", "compileSdk = 36")
           build_text = build_text.replace(
               'versionName = "0.2.3"',
               'versionName = "0.2.3-S938BXXSBCZG3-test"',
@@ -213,7 +226,7 @@ jobs:
           Payload branch: ${PAYLOAD_BRANCH}
           Payload commit: ${PAYLOAD_COMMIT}
           APK type: debug-signed test build
-          APK compile SDK: 36
+          APK compile SDK: 37 preview
           EOF
           sha256sum \
             "${GITHUB_WORKSPACE}/Root-My-Galaxy-S938BXXSBCZG3-test.apk" \
