@@ -209,7 +209,7 @@ jobs:
           Profile: ${TARGET}
           Payload branch: ${PAYLOAD_BRANCH}
           Payload commit: ${PAYLOAD_COMMIT}
-          APK type: unsigned debug test build
+          APK type: debug-signed test build
           EOF
           sha256sum \
             "${GITHUB_WORKSPACE}/Root-My-Galaxy-S938BXXSBCZG3-test.apk" \
