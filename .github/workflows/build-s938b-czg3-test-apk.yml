@@ -42,11 +42,11 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK, NDK r29 and CMake
+      - name: Install Android SDK 36, NDK r29 and CMake
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
           SDK_LIST="$(mktemp)"
           sdkmanager --list > "$SDK_LIST"
@@ -59,8 +59,8 @@ jobs:
 
           sdkmanager \
             "platform-tools" \
-            "platforms;android-37" \
-            "build-tools;37.0.0" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
             "$NDK_PACKAGE" \
             "cmake;3.22.1"
 
@@ -183,6 +183,9 @@ jobs:
 
           gradle = Path("app-src/app/build.gradle.kts")
           build_text = gradle.read_text(encoding="utf-8")
+          if "compileSdk = 37" not in build_text:
+              raise SystemExit("app/build.gradle.kts no longer has compileSdk = 37")
+          build_text = build_text.replace("compileSdk = 37", "compileSdk = 36")
           build_text = build_text.replace(
               'versionName = "0.2.3"',
               'versionName = "0.2.3-S938BXXSBCZG3-test"',
@@ -210,6 +213,7 @@ jobs:
           Payload branch: ${PAYLOAD_BRANCH}
           Payload commit: ${PAYLOAD_COMMIT}
           APK type: debug-signed test build
+          APK compile SDK: 36
           EOF
           sha256sum \
             "${GITHUB_WORKSPACE}/Root-My-Galaxy-S938BXXSBCZG3-test.apk" \
