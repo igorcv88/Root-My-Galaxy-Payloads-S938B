@@ -17,8 +17,8 @@ concurrency:
 
 env:
   TARGET: pa3q-S938BXXSBCZG3
-  PAYLOAD_BRANCH: agent/port-s938bxxsbczg3
-  APP_BRANCH: agent/port-s938bxxsbczg3
+  PAYLOAD_BRANCH: main
+  APP_BRANCH: main
 
 jobs:
   build:
@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Check out payload branch
+      - name: Check out payload main
         uses: actions/checkout@v4
         with:
           ref: ${{ env.PAYLOAD_BRANCH }}
@@ -81,7 +81,7 @@ jobs:
              "artifacts/${TARGET}/cve-2026-43499-app.so"
           sha256sum "artifacts/${TARGET}/cve-2026-43499-app.so"
 
-      - name: Add exact CZG3 profile to branch-only manifest
+      - name: Add exact CZG3 profile to main manifest
         working-directory: payloads
         shell: python
         run: |
@@ -123,7 +123,7 @@ jobs:
           manifest["targets"] = targets
           manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-      - name: Publish payload and test manifest to test branch
+      - name: Publish payload and manifest to main
         working-directory: payloads
         shell: bash
         run: |
@@ -134,21 +134,21 @@ jobs:
             "artifacts/${TARGET}/cve-2026-43499-app.so" \
             support/targets-v2.json
           if git diff --cached --quiet; then
-            echo "Payload branch already contains the current build."
+            echo "Main already contains the current payload build."
           else
             git commit -m "Build ${TARGET} test payload"
             git push origin "HEAD:${PAYLOAD_BRANCH}"
           fi
           echo "PAYLOAD_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Check out app fork
+      - name: Check out app main
         uses: actions/checkout@v4
         with:
           repository: igorcv88/Root-My-Galaxy-S938B
           ref: ${{ env.APP_BRANCH }}
           path: app-src
 
-      - name: Point test APK at the fork test branch
+      - name: Point test APK at the fork main branch
         shell: python
         run: |
           from pathlib import Path
@@ -162,7 +162,7 @@ jobs:
           )
           test_commit_api = (
               "https://api.github.com/repos/igorcv88/"
-              "Root-My-Galaxy-Payloads-S938B/git/ref/heads/agent/port-s938bxxsbczg3"
+              "Root-My-Galaxy-Payloads-S938B/git/ref/heads/main"
           )
           old_raw_repo = "https://raw.githubusercontent.com/BuSung-dev/Root-My-Galaxy-Payloads"
           test_raw_repo = "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-S938B"
