@@ -1,75 +1,62 @@
-# Root My Galaxy Payloads — S938B
+# Root My Galaxy Payloads
 
-This repository is the maintained payload and support-feed companion for
-[Root My Galaxy S938B](https://github.com/igorcv88/Root-My-Galaxy-S938B).
-The Android application resolves the current `main` commit first, then downloads
-the manifest and native files from that immutable commit.
-
-It contains:
+This repository contains the device-specific native side of
+[Root My Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy):
 
 - exact firmware profiles and offsets;
-- the app-domain CVE-2026-43499 native exploit payload;
-- KernelSU late-load binaries;
-- `support/targets-v2.json`, consumed by the application.
+- the app-domain CVE-2026-43499 exploit source and compiled payload;
+- the app bootstrap helper source;
+- the verified KernelSU late-load build artifacts;
+- the support feed consumed by the application.
 
-It intentionally does not contain the Android application source or a Zygisk
-implementation.
+It intentionally does not contain Android application source code.
 
-## Validated target
+## Supported profiles
 
-| Profile | Device | Firmware | Kernel | Status |
+| Profile | Device | Firmware | Kernel/KMI | Status |
 | --- | --- | --- | --- | --- |
-| `pa3q-S938BXXSBCZG3` | Galaxy S25 Ultra `SM-S938B` | `BP4A.251205.006.S938BXXSBCZG3` | `6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k` | Hardware validated |
+| `pa3q-S938BXXSBCZG3` | Galaxy S25 Ultra `SM-S938B` | `BP4A.251205.006.S938BXXSBCZG3` | `android15-6.6` | Device-tested |
+| `pa3q-S938NKSUACZF1` | Galaxy S25 Ultra `SM-S938N` | `BP4A.251205.006.S938NKSUACZF1` | `android15-6.6` | Device-tested |
+| `pa3q-S9380ZHUBCZF1` | Galaxy S25 Ultra `SM-S9380` | `BP4A.251205.006.S9380ZHUBCZF1` | `android15-6.6` | Device-tested |
+| `e3q-S928USQS6DZF2` | Galaxy S24 Ultra `SM-S928U/SM-S928U1` (Snapdragon 8 Gen 3) | `BP4A.251205.006.S928USQS6DZF2` | `6.1.145-android14-11-33419968-abS928USQS6DZF2` | Hardware debugging in progress |
 
-The validated device acquired temporary KernelSU root with the simple exploit.
-After an external KernelSU Manager **Soft Reboot**, Zygisk modules worked with
-both a compatible provider and the tested
-[NeoZygisk PostBoot fork](https://github.com/igorcv88/NeoZygisk-PostBoot).
+Profiles are exact-firmware profiles. A matching model with a different build
+is not equivalent and must be ported separately.
 
-## Other inherited profiles
+Root My Galaxy requires both the exact `uname -r` value in `kernelRelease` and
+the complete `/proc/version` value in `kernelVersion`. This distinguishes
+vendor kernels that expose the same release string but were linked from
+different builds. Model and device fields are descriptive metadata; build
+display ID, SDK, ABI, and page size remain part of automatic profile selection.
 
-The feed also retains the upstream profiles below. They are not equivalent to
-the validated S938B CZG3 target and must not be selected automatically for a
-different build.
+The `SM-S938B` target was built from the CZG3 firmware images, uses a dedicated
+32-slide P0 fingerprint table, and was tested on the exact locked-bootloader
+device represented by the profile. The normal Root My Galaxy flow acquired
+bootstrap root, late-loaded the Samsung-KDP KernelSU build and verified its
+control channel.
 
-| Profile | Device | Firmware | Status |
-| --- | --- | --- | --- |
-| `pa3q-S938NKSUACZF1` | `SM-S938N` | `BP4A.251205.006.S938NKSUACZF1` | Upstream profile |
-| `pa3q-S9380ZHUBCZF1` | `SM-S9380` | `BP4A.251205.006.S9380ZHUBCZF1` | Upstream profile |
-| `e3q-S928USQS6DZF2` | `SM-S928U` | `BP4A.251205.006.S928USQS6DZF2` | Experimental/upstream |
+The port is based on the exploit source published at
+<https://github.com/NebuSec/CyberMeowfia/tree/main/IonStack/CVE-2026-43499/exploit>.
 
-Profiles are exact-firmware profiles. The application matches the full kernel
-release, full build display ID, SDK, ABI and page size. A matching model with a
-different firmware is not a supported equivalent.
+## Feed delivery
 
-## Feed integrity model
+Root My Galaxy resolves the payload repository's current commit first and
+fetches `support/targets-v2.json` and every artifact from that immutable commit.
+Per-artifact SHA-256 fields and manifest signatures are not part of schema
+version 2.
 
-The application is configured specifically for:
-
-```text
-https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B
-```
-
-It obtains the SHA of `refs/heads/main`, then rewrites every mutable manifest URL
-to the same immutable commit. The validation workflow rejects:
-
-- artifact URLs outside this repository;
-- missing files;
-- file-size mismatches;
-- a missing or altered `pa3q-S938BXXSBCZG3` profile;
-- duplicate profile IDs.
-
-Schema version 2 records declared file sizes but does not include per-file
-SHA-256 values or a signed manifest. Commit pinning prevents a manifest and its
-payloads from being fetched from different revisions.
-
-## Building a native exploit payload
+## Build
 
 ```sh
 make TARGET=pa3q-S938BXXSBCZG3 ANDROID_NDK_HOME=/path/to/android-ndk release
+make TARGET=pa3q-S938NKSUACZF1 ANDROID_NDK_HOME=/path/to/android-ndk
+make TARGET=e3q-S928USQS6DZF2 ANDROID_NDK_HOME=/path/to/android-ndk
+make TARGET=essi-S721NKSSCDZF3 ANDROID_NDK_HOME=/path/to/android-ndk
+make TARGET=e1s-S921BXXSFDZF2 ANDROID_NDK_HOME=/path/to/android-ndk
+make TARGET=a15-A155NKSS6BYH1 ANDROID_NDK_HOME=/path/to/android-ndk
 ```
 
-Expected outputs:
+Outputs:
 
 ```text
 build/<profile>/cve-2026-43499
@@ -77,6 +64,17 @@ build/<profile>/cve-2026-43499-app.so
 build/<profile>/cve-2026-43499-root
 ```
 
-The original exploit work is derived from NebuSec's CVE-2026-43499 research.
-Use this repository only on devices you own or are explicitly authorized to
-test.
+The complete firmware-to-profile procedure is recorded in
+[`docs/PORTING.md`](docs/PORTING.md). Samsung-specific KernelSU changes and
+versioned artifacts are documented in [`kernelsu/README.md`](kernelsu/README.md).
+The exact S938B CZG3 analysis and hardware result are recorded in
+[`docs/SM-S938B-S938BXXSBCZG3.md`](docs/SM-S938B-S938BXXSBCZG3.md).
+The exact S921B DZF2 analysis is recorded separately in
+[`docs/SM-S921B-S921BXXSFDZF2.md`](docs/SM-S921B-S921BXXSFDZF2.md), and the
+S928U/S928U1 DZF2 analysis is in
+[`docs/SM-S928U1-S928U1UES6DZF2.md`](docs/SM-S928U1-S928U1UES6DZF2.md). S921B
+is an Exynos 2400 target and is not a Qualcomm/Snapdragon reference for E3Q.
+The 5.10 A15 analysis is in
+[`docs/SM-A155N-A155NKSS6BYH1.md`](docs/SM-A155N-A155NKSS6BYH1.md).
+
+Use only on devices you own or are explicitly authorized to test.
