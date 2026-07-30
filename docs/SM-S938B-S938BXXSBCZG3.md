@@ -1,8 +1,9 @@
 # SM-S938B / S938BXXSBCZG3 port record
 
-Status: target source and firmware-specific P0 table complete; release build and staged hardware validation pending.
+Status: **COMPLETE — release payload built and hardware validated**
 
-The target is intentionally absent from `support/targets-v2.json`. Automatic support must remain disabled until the exact release payload is built and tested.
+The exact profile is enabled in `support/targets-v2.json` after successful use
+on the device represented by the profile.
 
 ## Exact identity
 
@@ -23,7 +24,11 @@ uname -v: #1 SMP PREEMPT Thu Jul  2 00:48:56 UTC 2026
 sched:sched_blocked_reason runtime event ID: 109
 ```
 
-The existing `pa3q-S938NKSUACZF1` advanced-mode profile completed successfully on this exact device/build and loaded the Samsung-KDP KernelSU module. This is strong runtime evidence for the shared physical mapping and exploit path, but not a substitute for exact feed identity or a CZG3 P0 table.
+An inherited `pa3q-S938NKSUACZF1` profile was first used manually to confirm the
+shared physical mapping and exploit path. That test loaded the Samsung-KDP
+KernelSU module, but it was not used as the final support profile because the
+firmware identity and one P0 fingerprint word differ. The enabled profile uses
+the CZG3-specific table and exact feed identity below.
 
 ## Input provenance
 
@@ -47,7 +52,8 @@ The existing `pa3q-S938NKSUACZF1` advanced-mode profile completed successfully o
 
 ## Boot and vendor-boot extraction
 
-`boot.img` is Android boot header v4 with 4096-byte alignment and no generic ramdisk. The kernel starts at `0x1000` and is an uncompressed ARM64 Image.
+`boot.img` is Android boot header v4 with 4096-byte alignment and no generic
+ramdisk. The kernel starts at `0x1000` and is an uncompressed ARM64 Image.
 
 ```text
 raw kernel size: 38,849,024 (0x250ca00)
@@ -58,7 +64,10 @@ flags: 0xa
 magic: ARMd
 ```
 
-`vendor_boot.img` is header v4 with 4096-byte pages, a 35,661,561-byte vendor ramdisk, an 8,486,851-byte DTB, two ramdisk-table entries, and a 233-byte bootconfig. The platform and `recovery` legacy-LZ4 ramdisks both decompressed successfully as CPIO archives.
+`vendor_boot.img` is header v4 with 4096-byte pages, a 35,661,561-byte vendor
+ramdisk, an 8,486,851-byte DTB, two ramdisk-table entries, and a 233-byte
+bootconfig. The platform and `recovery` legacy-LZ4 ramdisks both decompressed
+successfully as CPIO archives.
 
 ## BTF recovery
 
@@ -97,11 +106,13 @@ struct page: size=0x40, compound_head=0x08, slab_cache=0x08, page_type=0x30
 miscdevice.fops=0x10
 ```
 
-These values equal the two checked-in PA3Q CZF1 layouts, but were derived independently from the CZG3 BTF.
+These values equal the two checked-in PA3Q CZF1 layouts, but were derived
+independently from the CZG3 BTF.
 
 ## Kallsyms and exploit offsets
 
-114,228 symbols were decoded. The recovered relative base is `0xffffffc080000000`.
+114,228 symbols were decoded. The recovered relative base is
+`0xffffffc080000000`.
 
 ```text
 kallsyms_names:       0x1460298
@@ -138,7 +149,8 @@ kallsyms_offsets:     0x15eaa20
 | `SELINUX_ENFORCING_OFF` | first member of `selinux_state` | `0x0255f5c0` |
 | `SLIDE_SYSCTL_BOOTID_OFF` | `sysctl_bootid` | `0x026426d8` |
 
-Every numeric exploit offset equals the two CZF1 PA3Q targets. This is a direct CZG3 result, not an inferred copy.
+Every numeric exploit offset equals the two CZF1 PA3Q targets. This is a direct
+CZG3 result, not an inferred copy.
 
 ## Trace cross-check
 
@@ -151,7 +163,8 @@ offline event ID: 20 + 89 = 109
 runtime event ID: 109
 ```
 
-The exact offline/runtime agreement independently validates the recovered symbol order.
+The exact offline/runtime agreement independently validates the recovered
+symbol order.
 
 ## Physical mapping
 
@@ -163,11 +176,17 @@ The source target retains:
 #define P0_KERNEL_PHYS_LOAD 0xa8000000ULL
 ```
 
-The provided Qualcomm ABL is an outer ELF containing a UEFI firmware volume; the load value is not exposed as a simple outer-ELF literal. Inner-module static derivation remains pending. The value is nevertheless hardware-confirmed on this exact CZG3 build because the successful S938N payload used the same `0xa8000000` mapping. This limitation must remain explicit.
+The Qualcomm ABL is an outer ELF containing a UEFI firmware volume, so the load
+value is not exposed as a simple outer-ELF literal. The value was first
+confirmed by the successful inherited S938N payload and then confirmed again by
+the exact CZG3 payload completing on the same device.
 
 ## Firmware-specific P0 table
 
-A fresh table was generated from the CZG3 Image for all 32 slides (`0x000000` through `0x1f0000`, step `0x10000`) and all eight qwords per row (`0x000` through `0xe00`, step `0x200`). All 256 qwords were read back from the source Image.
+A fresh table was generated from the CZG3 Image for all 32 slides (`0x000000`
+through `0x1f0000`, step `0x10000`) and all eight qwords per row (`0x000`
+through `0xe00`, step `0x200`). All 256 qwords were read back from the source
+Image.
 
 ```text
 header: src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h
@@ -175,7 +194,8 @@ size: 7,379
 SHA-256: 0df8737f0260a35c0d2a65584c6150c0d8f56c39085107a777677da35b39c75e
 ```
 
-The table is not fully interchangeable with CZF1. At slide `0x0c0000`, the CZG3 row contains:
+The table is not fully interchangeable with CZF1. At slide `0x0c0000`, the
+CZG3 row contains:
 
 ```text
 0x913da821d000b321
@@ -187,25 +207,39 @@ while the S938N CZF1 table contains:
 0x913dc821d000b321
 ```
 
-This single observed qword difference is sufficient to require the dedicated header.
+This single observed qword difference is sufficient to require the dedicated
+header.
 
-## Added target
+## Added target and artifact
 
 ```text
 src/targets/pa3q-S938BXXSBCZG3/target.h
 src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h
+artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
 ```
 
-Both headers pass a standalone C11 syntax check. Expected build command:
+Both headers pass a standalone C11 syntax check. The release payload was built
+with:
 
 ```sh
 make TARGET=pa3q-S938BXXSBCZG3 ANDROID_NDK_HOME=/path/to/android-ndk-r29 release
 ```
 
-## Remaining release gates
+The published app payload is 104,128 bytes, matching the size recorded in the
+support feed.
 
-1. Build `cve-2026-43499-app.release.so` and confirm the repository-fixed size of 104,128 bytes.
-2. Publish it as `artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so`.
-3. Run the exact profile and capture selected P0 slide, exploit log, module insertion, and post-load `dmesg`.
-4. Record the exact `ksud-s25u-kdp` and embedded KO hashes used in the successful test.
-5. Only then add the exact profile to `support/targets-v2.json` and the supported-profile table.
+## Hardware validation
+
+The exact profile was tested on the locked-bootloader device identified above.
+The application selected `pa3q-S938BXXSBCZG3`, acquired bootstrap root,
+staged the Samsung-KDP KernelSU build and verified the KernelSU control channel.
+A complete device reboot removed the temporary root as expected; rerunning the
+same profile restored it.
+
+The successful root session was subsequently used for the post-boot Zygisk
+investigation. Zygisk Next worked without source changes after a KernelSU
+Manager Soft Reboot. A dedicated NeoZygisk post-boot fork also reached a stable
+state after moving its live runtime to `/dev/.neozygisk`, attaching a
+same-generation monitor after the exploit, and waiting for a user-initiated
+KernelSU Manager Soft Reboot. Those provider changes are separate from this
+payload contribution and do not alter the exploit or KernelSU payload.
