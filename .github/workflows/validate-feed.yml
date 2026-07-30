@@ -34,8 +34,8 @@ jobs:
           assert len(ids) == len(set(ids)), "duplicate profile IDs"
 
           prefix = (
-              "https://raw.githubusercontent.com/igorcv88/"
-              "Root-My-Galaxy-Payloads-S938B/main/"
+              "https://raw.githubusercontent.com/BuSung-dev/"
+              "Root-My-Galaxy-Payloads/main/"
           )
 
           def validate_artifact(profile_id: str, artifact: dict) -> None:
@@ -70,12 +70,14 @@ jobs:
               "#1 SMP PREEMPT Thu Jul  2 00:48:56 UTC 2026"
           )
           assert validated["model"] == "SM-S938B"
+          assert validated["device"] == "pa3q"
           assert validated["buildDisplay"] == "BP4A.251205.006.S938BXXSBCZG3"
           assert validated["kernelRelease"] == expected_kernel_release
           assert validated["kernelVersion"] == expected_kernel_version
           assert validated["sdk"] == 36
           assert validated["abi"] == "arm64-v8a"
           assert validated["pageSize"] == 4096
+          assert validated["exploit"]["size"] == 104128
 
           print(f"Validated {len(targets)} profiles and all referenced payload files")
           PY
