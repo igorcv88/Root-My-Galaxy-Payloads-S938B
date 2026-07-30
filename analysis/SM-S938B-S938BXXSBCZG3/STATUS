@@ -1,4 +1,4 @@
 source-port-complete
-release-build-pending
-hardware-validation-pending
-support-feed-disabled
+release-build-complete
+hardware-validation-complete
+support-feed-enabled
