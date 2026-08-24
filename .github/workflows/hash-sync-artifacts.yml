@@ -1,0 +1,23 @@
+name: Hash sync artifacts
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hash exact S938B artifacts
+        run: |
+          set -euo pipefail
+          sha256sum \
+            artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so \
+            kernelsu/ksud-s25u-kdp
+          stat -c '%s %n' \
+            artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so \
+            kernelsu/ksud-s25u-kdp
