@@ -1,44 +1,62 @@
-name: Build S938B sync payload
+name: Promote rebuilt S938B sync payload
 
 on:
   pull_request:
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
+  promote:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
       - name: Set up NDK r29
         uses: nttld/setup-ndk@v1
         id: setup_ndk
         with:
           ndk-version: r29
           add-to-path: false
-      - name: Build exact S938B release payload
+      - name: Rebuild and promote exact S938B payload
         env:
           ANDROID_NDK_HOME: ${{ steps.setup_ndk.outputs.ndk-path }}
         run: |
           set -euo pipefail
           make TARGET=pa3q-S938BXXSBCZG3 release
           NEW=build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.release.so
-          OLD=artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
-          sha256sum "$NEW" "$OLD"
-          stat -c '%s %n' "$NEW" "$OLD"
-          if cmp -s "$NEW" "$OLD"; then
-            echo 'SYNC_PAYLOAD_IDENTICAL=yes'
-          else
-            echo 'SYNC_PAYLOAD_IDENTICAL=no'
-          fi
-          mkdir -p sync-output
-          cp "$NEW" sync-output/cve-2026-43499-app.so
-      - name: Upload rebuilt payload
-        uses: actions/upload-artifact@v4
-        with:
-          name: s938b-sync-payload
-          path: sync-output/cve-2026-43499-app.so
-          if-no-files-found: error
-          retention-days: 3
+          DEST=artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
+          test "$(stat -c %s "$NEW")" = 104128
+          NEW_SHA="$(sha256sum "$NEW" | awk '{print $1}')"
+          cp "$NEW" "$DEST"
+
+          python3 - "$NEW_SHA" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          sha = sys.argv[1]
+          manifest_path = pathlib.Path("support/targets-v3.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          target = next(p for p in manifest["payloads"] if p["payloadId"] == "pa3q-S938BXXSBCZG3")
+          target["exploit"]["sha256"] = sha
+          target["exploit"]["size"] = 104128
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+          readme = pathlib.Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+          old_line = next(line for line in text.splitlines() if line.strip().startswith("sha256:") and "ba0894d1214e3c46305d8acb0ab065eb110833b4b9973c9250aca5bfcb98c214" in line)
+          text = text.replace(old_line, f"  sha256:  {sha}", 1)
+          readme.write_text(text, encoding="utf-8")
+          PY
+
+          rm .github/workflows/build-s938b-sync.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$DEST" support/targets-v3.json README.md .github/workflows/build-s938b-sync.yml
+          git diff --cached --stat
+          git commit -m "Rebuild exact S938B payload with synced upstream source"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
