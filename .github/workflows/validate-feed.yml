@@ -16,22 +16,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate manifest and local artifacts
+      - name: Validate exact manifest and local artifacts
         run: |
           python3 - <<'PY'
+          import hashlib
           import json
           import pathlib
+          import re
           import urllib.parse
 
           root = pathlib.Path.cwd()
-          manifest_path = root / "support" / "targets-v2.json"
+          manifest_path = root / "support" / "targets-v3.json"
           data = json.loads(manifest_path.read_text(encoding="utf-8"))
-          assert data.get("schemaVersion") == 2, "unexpected schema version"
+          assert data.get("schemaVersion") == 3, "unexpected schema version"
 
-          targets = data.get("targets")
-          assert isinstance(targets, list) and targets, "empty target feed"
-          ids = [target["profileId"] for target in targets]
-          assert len(ids) == len(set(ids)), "duplicate profile IDs"
+          payloads = data.get("payloads")
+          assert isinstance(payloads, list) and payloads, "empty payload feed"
+          ids = [item["payloadId"] for item in payloads]
+          assert len(ids) == len(set(ids)), "duplicate payload IDs"
 
           prefix = (
               "https://raw.githubusercontent.com/igorcv88/"
@@ -41,6 +43,10 @@ jobs:
           def validate_artifact(profile_id: str, artifact: dict) -> None:
               url = artifact["url"]
               expected_size = artifact["size"]
+              expected_sha256 = artifact["sha256"].lower()
+              assert re.fullmatch(r"[0-9a-f]{64}", expected_sha256), (
+                  f"{profile_id}: invalid SHA-256"
+              )
               assert url.startswith(prefix), f"{profile_id}: external artifact URL: {url}"
               relative = urllib.parse.unquote(url.removeprefix(prefix))
               path = root / relative
@@ -49,33 +55,46 @@ jobs:
               assert actual_size == expected_size, (
                   f"{profile_id}: {relative} size {actual_size} != {expected_size}"
               )
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              assert digest == expected_sha256, (
+                  f"{profile_id}: {relative} sha256 {digest} != {expected_sha256}"
+              )
 
-          for target in targets:
-              validate_artifact(target["profileId"], target["exploit"])
-              validate_artifact(target["profileId"], target["kernelsu"])
+          for payload in payloads:
+              validate_artifact(payload["payloadId"], payload["exploit"])
+              validate_artifact(payload["payloadId"], payload["kernelsu"])
 
-          validated = next(
-              target for target in targets
-              if target["profileId"] == "pa3q-S938BXXSBCZG3"
+          target = next(
+              item for item in payloads
+              if item["payloadId"] == "pa3q-S938BXXSBCZG3"
           )
-          expected_kernel_release = (
-              "6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k"
-          )
-          expected_kernel_version = (
-              "Linux version 6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k "
-              "(kleaf@build-host) (Android (11368308, +pgo, +bolt, +lto, +mlgo, "
-              "based on r510928) clang version 18.0.0 "
-              "(https://android.googlesource.com/toolchain/llvm-project "
-              "477610d4d0d988e69dbc3fae4fe86bff3f07f2b5), LLD 18.0.0) "
-              "#1 SMP PREEMPT Thu Jul  2 00:48:56 UTC 2026"
-          )
-          assert validated["model"] == "SM-S938B"
-          assert validated["buildDisplay"] == "BP4A.251205.006.S938BXXSBCZG3"
-          assert validated["kernelRelease"] == expected_kernel_release
-          assert validated["kernelVersion"] == expected_kernel_version
-          assert validated["sdk"] == 36
-          assert validated["abi"] == "arm64-v8a"
-          assert validated["pageSize"] == 4096
+          exact = target["exactMatch"]
+          expected = {
+              "manufacturer": "samsung",
+              "model": "SM-S938B",
+              "device": "pa3q",
+              "buildDisplay": "BP4A.251205.006.S938BXXSBCZG3",
+              "buildFingerprint": (
+                  "samsung/pa3qxxx/pa3q:16/BP4A.251205.006/"
+                  "S938BXXSBCZG3_OXMBCZG3:user/release-keys"
+              ),
+              "kernelRelease": (
+                  "6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k"
+              ),
+              "kernelVersionInfo": (
+                  "#1 SMP PREEMPT Thu Jul  2 00:48:56 UTC 2026"
+              ),
+              "machine": "aarch64",
+              "sdk": 36,
+              "abi": "arm64-v8a",
+              "pageSize": 4096,
+          }
+          assert exact == expected, f"exact S938B identity drifted: {exact!r}"
+          assert target["models"] == ["SM-S938B"]
+          assert target["kernelVersions"] == ["6.6.98"]
 
-          print(f"Validated {len(targets)} profiles and all referenced payload files")
+          assert (root / "src/targets/pa3q-S938BXXSBCZG3/target.h").is_file()
+          assert (root / "src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h").is_file()
+
+          print(f"Validated {len(payloads)} fail-closed payload profile(s)")
           PY
