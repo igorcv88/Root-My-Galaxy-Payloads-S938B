@@ -1,82 +1,72 @@
-# Root My Galaxy Payloads — S938B
+# Root My Galaxy Payloads — SM-S938B
 
-This repository is the maintained payload and support-feed companion for
-[Root My Galaxy S938B](https://github.com/igorcv88/Root-My-Galaxy-S938B).
-The Android application resolves the current `main` commit first, then downloads
-the manifest and native files from that immutable commit.
+This repository is the controlled payload feed for [`igorcv88/Root-My-Galaxy-S938B`](https://github.com/igorcv88/Root-My-Galaxy-S938B).
 
-It contains:
+Its exploit infrastructure is synchronized with [`BuSung-dev/Root-My-Galaxy-Payloads`](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads), while the application feed remains deliberately restricted to the exact validated Galaxy S25 Ultra firmware used by this fork.
 
-- exact firmware profiles and offsets;
-- the app-domain CVE-2026-43499 native exploit payload;
-- KernelSU late-load binaries;
-- `support/targets-v2.json`, consumed by the application.
+## Executable feed profile
 
-It intentionally does not contain the Android application source or a Zygisk
-implementation.
-
-## Validated target
-
-| Profile | Device | Firmware | Kernel | Status |
-| --- | --- | --- | --- | --- |
-| `pa3q-S938BXXSBCZG3` | Galaxy S25 Ultra `SM-S938B` | `BP4A.251205.006.S938BXXSBCZG3` | `6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k` | Hardware validated |
-
-The validated device acquired temporary KernelSU root with the simple exploit.
-After an external KernelSU Manager **Soft Reboot**, Zygisk modules worked with
-both a compatible provider and the tested
-[NeoZygisk PostBoot fork](https://github.com/igorcv88/NeoZygisk-PostBoot).
-
-## Other inherited profiles
-
-The feed also retains the upstream profiles below. They are not equivalent to
-the validated S938B CZG3 target and must not be selected automatically for a
-different build.
-
-| Profile | Device | Firmware | Status |
-| --- | --- | --- | --- |
-| `pa3q-S938NKSUACZF1` | `SM-S938N` | `BP4A.251205.006.S938NKSUACZF1` | Upstream profile |
-| `pa3q-S9380ZHUBCZF1` | `SM-S9380` | `BP4A.251205.006.S9380ZHUBCZF1` | Upstream profile |
-| `e3q-S928USQS6DZF2` | `SM-S928U` | `BP4A.251205.006.S928USQS6DZF2` | Experimental/upstream |
-
-Profiles are exact-firmware profiles. The application matches the full kernel
-release, full build display ID, SDK, ABI and page size. A matching model with a
-different firmware is not a supported equivalent.
-
-## Feed integrity model
-
-The application is configured specifically for:
+`support/targets-v3.json` exposes one fail-closed profile:
 
 ```text
-https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B
+Payload ID:   pa3q-S938BXXSBCZG3
+Model:        SM-S938B
+Device:       pa3q
+Build:        BP4A.251205.006.S938BXXSBCZG3
+Fingerprint:  samsung/pa3qxxx/pa3q:16/BP4A.251205.006/S938BXXSBCZG3_OXMBCZG3:user/release-keys
+Kernel:       6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k
+uname -v:     #1 SMP PREEMPT Thu Jul  2 00:48:56 UTC 2026
+Machine:      aarch64
+SDK / ABI:    36 / arm64-v8a
+Page size:    4096
 ```
 
-It obtains the SHA of `refs/heads/main`, then rewrites every mutable manifest URL
-to the same immutable commit. The validation workflow rejects:
+The exact target source is under `src/targets/pa3q-S938BXXSBCZG3/`. Its CZG3 P0 fingerprint table is not byte-identical to the S938N CZF1 table, so the shared upstream S25 profile is not substituted for this exact target.
 
-- artifact URLs outside this repository;
-- missing files;
-- file-size mismatches;
-- a missing or altered `pa3q-S938BXXSBCZG3` profile;
-- duplicate profile IDs.
+## Legacy v2 compatibility
 
-Schema version 2 records declared file sizes but does not include per-file
-SHA-256 values or a signed manifest. Commit pinning prevents a manifest and its
-payloads from being fetched from different revisions.
+`support/targets-v2.json` is intentionally retained for already released versions of the S938B app. It contains only the exact CZG3 profile and continues to reference the previously hardware-validated exploit:
 
-## Building a native exploit payload
+```text
+artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
+  size:    104128
+  sha256:  ba0894d1214e3c46305d8acb0ab065eb110833b4b9973c9250aca5bfcb98c214
+```
+
+That path must not be replaced by a newly rebuilt payload. The validation workflow checks its SHA-256 even though the legacy v2 manifest itself predates hash fields.
+
+## v3 synchronized payload
+
+The v3 app uses a separate artifact rebuilt from the exact CZG3 target against the synchronized upstream exploit source:
+
+```text
+artifacts/pa3q-S938BXXSBCZG3-v0265/cve-2026-43499-app.so
+  size:    104128
+  sha256:  1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303
+
+kernelsu/ksud-s25u-kdp
+  size:    6407096
+  sha256:  fa3edcc7d168637394877b30cb1f909d762dda788ec14051f4ae79edd6562d63
+```
+
+The v3 feed includes size and SHA-256 for every executable artifact. The application resolves this repository's current commit first, then rewrites all manifest artifact URLs to that immutable commit before downloading them.
+
+The `Validate payload feed` workflow rejects external URLs, missing files, size/hash mismatches, identity drift, changes to the legacy hardware-validated payload, or accidental collapse of the v2 and v3 generations.
+
+## Upstream synchronization
+
+The repository also keeps the current upstream exploit source, target infrastructure, KernelSU build material, and additional device research. Those additional sources are not automatically eligible for execution by the S938B application feed unless explicitly added to the controlled manifest with exact identity and hashes.
+
+## Build
+
+For the S938B target:
 
 ```sh
 make TARGET=pa3q-S938BXXSBCZG3 ANDROID_NDK_HOME=/path/to/android-ndk release
 ```
 
-Expected outputs:
+Outputs are generated under `build/pa3q-S938BXXSBCZG3/`.
 
-```text
-build/<profile>/cve-2026-43499
-build/<profile>/cve-2026-43499-app.so
-build/<profile>/cve-2026-43499-root
-```
+The firmware analysis and target derivation are recorded in [`docs/SM-S938B-S938BXXSBCZG3.md`](docs/SM-S938B-S938BXXSBCZG3.md). General upstream-derived porting material remains under `docs/` and `kernelsu/`.
 
-The original exploit work is derived from NebuSec's CVE-2026-43499 research.
-Use this repository only on devices you own or are explicitly authorized to
-test.
+Use only on devices you own or are explicitly authorized to test.

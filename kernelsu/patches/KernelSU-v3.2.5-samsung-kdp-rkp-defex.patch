@@ -1,5 +1,5 @@
 diff --git a/kernel/Kbuild b/kernel/Kbuild
-index fd31bb51..d642c2ca 100644
+index fd31bb51..5afb4d21 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
 @@ -1,5 +1,8 @@
@@ -11,7 +11,7 @@ index fd31bb51..d642c2ca 100644
  kernelsu-objs += feature/kernel_umount.o
  kernelsu-objs += feature/sulog.o
  kernelsu-objs += feature/sucompat.o
-@@ -61,9 +64,19 @@ endif
+@@ -61,9 +64,22 @@ endif
  ifeq ($(CONFIG_KSU_DEBUG),y)
  ccflags-y += -DCONFIG_KSU_DEBUG=1
  endif
@@ -24,6 +24,9 @@ index fd31bb51..d642c2ca 100644
 +ifeq ($(CONFIG_KSU_SAMSUNG_DEFEX),y)
 +ccflags-y += -DCONFIG_KSU_SAMSUNG_DEFEX=1
 +endif
++ifeq ($(CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT),y)
++ccflags-y += -DCONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=1
++endif
  endif
  
  ccflags-y += -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
@@ -31,7 +34,7 @@ index fd31bb51..d642c2ca 100644
  ccflags-y += -I$(objtree)/security/selinux -include $(srctree)/include/uapi/asm-generic/errno.h
  
  ifeq ($(filter /%,$(src)),)
-@@ -72,7 +85,7 @@ else
+@@ -72,7 +88,7 @@ else
  KSU_KERNEL_DIR := $(src)
  endif
  
@@ -40,6 +43,17 @@ index fd31bb51..d642c2ca 100644
  
  obj-$(CONFIG_KSU) += kernelsu.o
  
+@@ -109,7 +125,9 @@ ccflags-y += -DKSU_VERSION=$(KSU_VERSION)
+ else
+ # If there is no .git directory, use default version
+ $(warning "KSU_GIT_VERSION not defined! It is better to make KernelSU a git repository!")
+-ccflags-y += -DKSU_VERSION=16
++KSU_VERSION ?= 32525
++$(info -- KernelSU fallback version: $(KSU_VERSION))
++ccflags-y += -DKSU_VERSION=$(KSU_VERSION)
+ endif
+ 
+ KSU_NEW_DCACHE_FLUSH := $(shell grep -q __flush_dcache_area $(srctree)/arch/arm64/include/asm/cacheflush.h ; echo $$?)
 diff --git a/kernel/compat/samsung_defex.c b/kernel/compat/samsung_defex.c
 new file mode 100644
 index 00000000..bd384dc8
@@ -160,10 +174,10 @@ index 00000000..f635af65
 +#endif
 diff --git a/kernel/compat/samsung_kdp.c b/kernel/compat/samsung_kdp.c
 new file mode 100644
-index 00000000..ec853153
+index 00000000..b882f099
 --- /dev/null
 +++ b/kernel/compat/samsung_kdp.c
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,204 @@
 +#include <linux/completion.h>
 +#include <linux/cred.h>
 +#include <linux/errno.h>
@@ -174,6 +188,7 @@ index 00000000..ec853153
 +#include <linux/user_namespace.h>
 +#include <linux/version.h>
 +#include <linux/workqueue.h>
++#include <linux/pid.h>
 +
 +#include "infra/symbol_resolver.h"
 +#include "ksu_samsung_kdp.h"
@@ -186,7 +201,11 @@ index 00000000..ec853153
 +
 +typedef struct cred *(*prepare_ro_creds_t)(struct cred *cred, int command, u64 task);
 +typedef void (*kdp_assign_pgd_t)(struct task_struct *task);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
++typedef unsigned int (*kdp_usecount_sub_and_test_t)(int nr, struct cred *cred);
++#else
 +typedef unsigned int (*kdp_usecount_dec_and_test_t)(struct cred *cred);
++#endif
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
 +typedef long (*inc_rlimit_ucounts_t)(struct ucounts *ucounts, enum rlimit_type type, long value);
 +typedef bool (*dec_rlimit_ucounts_t)(struct ucounts *ucounts, enum rlimit_type type, long value);
@@ -203,7 +222,11 @@ index 00000000..ec853153
 +
 +static prepare_ro_creds_t prepare_ro_creds_fn;
 +static kdp_assign_pgd_t kdp_assign_pgd_fn;
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
++static kdp_usecount_sub_and_test_t kdp_usecount_sub_and_test_fn;
++#else
 +static kdp_usecount_dec_and_test_t kdp_usecount_dec_and_test_fn;
++#endif
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
 +static inc_rlimit_ucounts_t inc_rlimit_ucounts_fn;
 +static dec_rlimit_ucounts_t dec_rlimit_ucounts_fn;
@@ -276,7 +299,11 @@ index 00000000..ec853153
 +#ifdef CONFIG_KSU_SAMSUNG_KDP
 +    struct cred *mutable_cred = (struct cred *)cred;
 +
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
++    if (mutable_cred && kdp_usecount_sub_and_test_fn(1, mutable_cred))
++#else
 +    if (mutable_cred && kdp_usecount_dec_and_test_fn(mutable_cred))
++#endif
 +        __put_cred(mutable_cred);
 +#else
 +    put_cred(cred);
@@ -288,12 +315,25 @@ index 00000000..ec853153
 +#ifdef CONFIG_KSU_SAMSUNG_KDP
 +    prepare_ro_creds_fn = (prepare_ro_creds_t)ksu_resolve_symbol_for_functable_hook("prepare_ro_creds");
 +    kdp_assign_pgd_fn = (kdp_assign_pgd_t)ksu_resolve_symbol_for_functable_hook("kdp_assign_pgd");
-+    kdp_usecount_dec_and_test_fn = (kdp_usecount_dec_and_test_t)ksu_resolve_symbol_for_functable_hook(
-+        "kdp_usecount_dec_and_test");
-+    if (!prepare_ro_creds_fn || !kdp_assign_pgd_fn || !kdp_usecount_dec_and_test_fn) {
++    if (!prepare_ro_creds_fn || !kdp_assign_pgd_fn) {
 +        pr_err("Samsung KDP credential functions unavailable\n");
 +        return -ENOENT;
 +    }
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
++    kdp_usecount_sub_and_test_fn = (kdp_usecount_sub_and_test_t)ksu_resolve_symbol_for_functable_hook(
++        "kdp_usecount_sub_and_test");
++    if (!kdp_usecount_sub_and_test_fn) {
++        pr_err("Samsung KDP credential functions unavailable\n");
++        return -ENOENT;
++    }
++#else
++    kdp_usecount_dec_and_test_fn = (kdp_usecount_dec_and_test_t)ksu_resolve_symbol_for_functable_hook(
++        "kdp_usecount_dec_and_test");
++    if (!kdp_usecount_dec_and_test_fn) {
++        pr_err("Samsung KDP credential functions unavailable\n");
++        return -ENOENT;
++    }
++#endif
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
 +    inc_rlimit_ucounts_fn = (inc_rlimit_ucounts_t)ksu_resolve_symbol_for_functable_hook("inc_rlimit_ucounts");
 +    dec_rlimit_ucounts_fn = (dec_rlimit_ucounts_t)ksu_resolve_symbol_for_functable_hook("dec_rlimit_ucounts");
@@ -1091,3 +1131,27 @@ index d60d56e5..f8e5f393 100644
  pub fn create_daemon(use_init_pgrp: bool) -> Result<bool> {
      create_daemon_with(use_init_pgrp, || Ok(()))
  }
+diff --git a/kernel/hook/arm64/patch_memory.c b/kernel/hook/arm64/patch_memory.c
+index 24ee0ea3..e8ff1e26 100644
+--- a/kernel/hook/arm64/patch_memory.c
++++ b/kernel/hook/arm64/patch_memory.c
+@@ -188,6 +188,11 @@ static int ksu_patch_text_cb(void *arg)
+ 
+ int ksu_patch_text(void *dst, void *src, size_t len, int flags)
+ {
++#ifdef CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT
++    pr_warn("patch_text disabled for this Samsung target: dst=0x%lx len=%zu flags=0x%x\n", (unsigned long)dst, len,
++            flags);
++    return -EOPNOTSUPP;
++#else
+     struct patch_text_info info = {
+         .dst = dst,
+         .src = src,
+@@ -197,6 +202,7 @@ int ksu_patch_text(void *dst, void *src, size_t len, int flags)
+     };
+ 
+     return stop_machine(ksu_patch_text_cb, &info, cpu_online_mask);
++#endif
+ }
+ 
+ #endif /* __aarch64__ */

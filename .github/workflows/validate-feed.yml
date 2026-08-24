@@ -16,66 +16,107 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate manifest and local artifacts
+      - name: Validate legacy v2 and exact v3 feeds
         run: |
           python3 - <<'PY'
+          import hashlib
           import json
           import pathlib
+          import re
           import urllib.parse
 
           root = pathlib.Path.cwd()
-          manifest_path = root / "support" / "targets-v2.json"
-          data = json.loads(manifest_path.read_text(encoding="utf-8"))
-          assert data.get("schemaVersion") == 2, "unexpected schema version"
-
-          targets = data.get("targets")
-          assert isinstance(targets, list) and targets, "empty target feed"
-          ids = [target["profileId"] for target in targets]
-          assert len(ids) == len(set(ids)), "duplicate profile IDs"
-
           prefix = (
               "https://raw.githubusercontent.com/igorcv88/"
               "Root-My-Galaxy-Payloads-S938B/main/"
           )
+          expected_identity = {
+              "manufacturer": "samsung",
+              "model": "SM-S938B",
+              "device": "pa3q",
+              "buildDisplay": "BP4A.251205.006.S938BXXSBCZG3",
+              "buildFingerprint": (
+                  "samsung/pa3qxxx/pa3q:16/BP4A.251205.006/"
+                  "S938BXXSBCZG3_OXMBCZG3:user/release-keys"
+              ),
+              "kernelRelease": (
+                  "6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k"
+              ),
+              "kernelVersionInfo": (
+                  "#1 SMP PREEMPT Thu Jul  2 00:48:56 UTC 2026"
+              ),
+              "machine": "aarch64",
+              "sdk": 36,
+              "abi": "arm64-v8a",
+              "pageSize": 4096,
+          }
 
-          def validate_artifact(profile_id: str, artifact: dict) -> None:
-              url = artifact["url"]
-              expected_size = artifact["size"]
-              assert url.startswith(prefix), f"{profile_id}: external artifact URL: {url}"
-              relative = urllib.parse.unquote(url.removeprefix(prefix))
-              path = root / relative
-              assert path.is_file(), f"{profile_id}: missing {relative}"
-              actual_size = path.stat().st_size
-              assert actual_size == expected_size, (
-                  f"{profile_id}: {relative} size {actual_size} != {expected_size}"
-              )
+          def local_path(url: str) -> pathlib.Path:
+              assert url.startswith(prefix), f"external artifact URL: {url}"
+              return root / urllib.parse.unquote(url.removeprefix(prefix))
 
-          for target in targets:
-              validate_artifact(target["profileId"], target["exploit"])
-              validate_artifact(target["profileId"], target["kernelsu"])
+          def digest(path: pathlib.Path) -> str:
+              return hashlib.sha256(path.read_bytes()).hexdigest()
 
-          validated = next(
-              target for target in targets
-              if target["profileId"] == "pa3q-S938BXXSBCZG3"
+          v2 = json.loads((root / "support/targets-v2.json").read_text(encoding="utf-8"))
+          assert v2.get("schemaVersion") == 2
+          assert len(v2.get("targets", [])) == 1, "legacy v2 feed must remain S938B-only"
+          legacy = v2["targets"][0]
+          assert legacy["profileId"] == "pa3q-S938BXXSBCZG3"
+          assert legacy["manufacturer"] == expected_identity["manufacturer"]
+          assert legacy["model"] == expected_identity["model"]
+          assert legacy["device"] == expected_identity["device"]
+          assert legacy["buildDisplay"] == expected_identity["buildDisplay"]
+          assert legacy["buildFingerprint"] == expected_identity["buildFingerprint"]
+          assert legacy["kernelRelease"] == expected_identity["kernelRelease"]
+          assert legacy["kernelBuildVersion"] == expected_identity["kernelVersionInfo"]
+          assert legacy["sdk"] == expected_identity["sdk"]
+          assert legacy["abi"] == expected_identity["abi"]
+          assert legacy["pageSize"] == expected_identity["pageSize"]
+          legacy_exploit = local_path(legacy["exploit"]["url"])
+          assert legacy_exploit == root / "artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so"
+          assert legacy_exploit.stat().st_size == legacy["exploit"]["size"] == 104128
+          assert digest(legacy_exploit) == "ba0894d1214e3c46305d8acb0ab065eb110833b4b9973c9250aca5bfcb98c214", (
+              "legacy hardware-validated exploit changed"
           )
-          expected_kernel_release = (
-              "6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k"
-          )
-          expected_kernel_version = (
-              "Linux version 6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k "
-              "(kleaf@build-host) (Android (11368308, +pgo, +bolt, +lto, +mlgo, "
-              "based on r510928) clang version 18.0.0 "
-              "(https://android.googlesource.com/toolchain/llvm-project "
-              "477610d4d0d988e69dbc3fae4fe86bff3f07f2b5), LLD 18.0.0) "
-              "#1 SMP PREEMPT Thu Jul  2 00:48:56 UTC 2026"
-          )
-          assert validated["model"] == "SM-S938B"
-          assert validated["buildDisplay"] == "BP4A.251205.006.S938BXXSBCZG3"
-          assert validated["kernelRelease"] == expected_kernel_release
-          assert validated["kernelVersion"] == expected_kernel_version
-          assert validated["sdk"] == 36
-          assert validated["abi"] == "arm64-v8a"
-          assert validated["pageSize"] == 4096
+          legacy_ksud = local_path(legacy["kernelsu"]["url"])
+          assert legacy_ksud.stat().st_size == legacy["kernelsu"]["size"] == 6407096
 
-          print(f"Validated {len(targets)} profiles and all referenced payload files")
+          v3 = json.loads((root / "support/targets-v3.json").read_text(encoding="utf-8"))
+          assert v3.get("schemaVersion") == 3
+          payloads = v3.get("payloads")
+          assert isinstance(payloads, list) and len(payloads) == 1, "v3 feed must remain S938B-only"
+          ids = [item["payloadId"] for item in payloads]
+          assert len(ids) == len(set(ids))
+          target = payloads[0]
+          assert target["payloadId"] == "pa3q-S938BXXSBCZG3"
+          assert target["models"] == ["SM-S938B"]
+          assert target["kernelVersions"] == ["6.6.98"]
+          assert target["exactMatch"] == expected_identity, (
+              f"exact S938B identity drifted: {target['exactMatch']!r}"
+          )
+
+          for artifact in (target["exploit"], target["kernelsu"]):
+              expected_sha256 = artifact["sha256"].lower()
+              assert re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+              path = local_path(artifact["url"])
+              assert path.is_file(), f"missing {path.relative_to(root)}"
+              assert path.stat().st_size == artifact["size"]
+              assert digest(path) == expected_sha256
+
+          synced = local_path(target["exploit"]["url"])
+          assert synced == root / "artifacts/pa3q-S938BXXSBCZG3-v0265/cve-2026-43499-app.so"
+          assert target["exploit"]["sha256"] == (
+              "1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303"
+          )
+          assert target["kernelsu"]["sha256"] == (
+              "fa3edcc7d168637394877b30cb1f909d762dda788ec14051f4ae79edd6562d63"
+          )
+          assert synced.read_bytes() != legacy_exploit.read_bytes(), (
+              "v2 legacy and v3 synced payloads unexpectedly collapsed"
+          )
+
+          assert (root / "src/targets/pa3q-S938BXXSBCZG3/target.h").is_file()
+          assert (root / "src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h").is_file()
+          print("Validated legacy v2 compatibility and exact hashed v3 S938B feed")
           PY

