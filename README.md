@@ -38,7 +38,7 @@ Current exact-profile artifacts:
 ```text
 artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
   size:    104128
-  sha256:  ba0894d1214e3c46305d8acb0ab065eb110833b4b9973c9250aca5bfcb98c214
+  sha256:  1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303
 
 kernelsu/ksud-s25u-kdp
   size:    6407096
