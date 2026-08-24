@@ -1,0 +1,44 @@
+name: Build S938B sync payload
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up NDK r29
+        uses: nttld/setup-ndk@v1
+        id: setup_ndk
+        with:
+          ndk-version: r29
+          add-to-path: false
+      - name: Build exact S938B release payload
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup_ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          make TARGET=pa3q-S938BXXSBCZG3 release
+          NEW=build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.release.so
+          OLD=artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
+          sha256sum "$NEW" "$OLD"
+          stat -c '%s %n' "$NEW" "$OLD"
+          if cmp -s "$NEW" "$OLD"; then
+            echo 'SYNC_PAYLOAD_IDENTICAL=yes'
+          else
+            echo 'SYNC_PAYLOAD_IDENTICAL=no'
+          fi
+          mkdir -p sync-output
+          cp "$NEW" sync-output/cve-2026-43499-app.so
+      - name: Upload rebuilt payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: s938b-sync-payload
+          path: sync-output/cve-2026-43499-app.so
+          if-no-files-found: error
+          retention-days: 3
