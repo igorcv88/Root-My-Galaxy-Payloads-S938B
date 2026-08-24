@@ -1,25 +1,43 @@
 # Support feed schema
 
-`targets-v3.json` keeps one entry for each shared exploit and KernelSU payload.
-Automatic selection matches the exact device model and three-part kernel
-version, such as `6.6.98`.
+This fork keeps the legacy `targets-v2.json` feed for older released clients and an exact, hash-verified `targets-v3.json` feed for current S938B builds.
 
-Each entry contains only:
+## Schema v3
+
+Each payload entry contains:
 
 - `payloadId` and `displayName`;
-- one or more exact `Build.MODEL` values in `models`;
-- one or more versions in `kernelVersions`;
-- `url` and `size` for the exploit and KernelSU artifacts.
+- one or more `Build.MODEL` values in `models`;
+- one or more short kernel versions in `kernelVersions` for Advanced/manual catalog filtering;
+- an `exactMatch` object used for automatic selection;
+- `url`, `size`, and `sha256` for the exploit and KernelSU artifacts.
 
-An entry may additionally set `requiresFreshP0Session` to `true` when slide
-discovery and exploitation must run in the same payload process. The app then
-disables its per-boot P0 cache for that profile and gives the single combined
-attempt the target-specific long timeout. The field defaults to `false`, so
-existing profiles retain the cached multi-attempt behavior.
+`models` and `kernelVersions` do **not** by themselves authorize automatic execution in this fork. They are compatibility metadata for the interactive Advanced flow.
 
-The app extracts the leading numeric version from `uname -r`. Kernel suffixes,
-Android build displays, fingerprints, and security-patch dates do not
-participate in matching.
+Automatic selection is fail-closed and requires a complete `exactMatch` identity. For the maintained SM-S938B profile this includes:
 
-`targets-v2.json` remains unchanged for released 0.2.3 clients. New clients
-read only schema version 3.
+- manufacturer;
+- model;
+- device;
+- `Build.DISPLAY`;
+- full build fingerprint;
+- full `uname -r` kernel release;
+- `uname` version information;
+- `uname` machine;
+- SDK level;
+- ABI;
+- page size.
+
+If any exact identity field differs, the profile is not automatically selected.
+
+## Artifact integrity
+
+The application first resolves the current commit SHA of this controlled repository, then reads `support/targets-v3.json` from that immutable commit. Artifact URLs from the manifest are rewritten to the same commit before download.
+
+Downloaded payloads must match both the declared byte size and SHA-256 digest before they are finalized for execution. Partial or mismatched downloads are deleted and fail closed.
+
+The current S938B v3 payload is maintained separately from the generic upstream S25-series profile because the hardware-validated `pa3q-S938BXXSBCZG3` exploit is not byte-identical to the upstream generic S938N-derived exploit even though both files have the same release size.
+
+## Legacy schema v2
+
+`targets-v2.json` remains available for older fork builds that still parse schema version 2. New synchronized app builds read schema version 3.
