@@ -10,6 +10,7 @@
 #include <unistd.h>
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
 #include <sched.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #endif
@@ -17,6 +18,12 @@
 static uint64_t run_id;
 static uint64_t started_ns;
 static const char *profile_name = "unset";
+static pid_t diag_owner_pid;
+
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+static void czg3_race_prepare_shared(void);
+static void czg3_race_flush_pending(int fallback_attempt);
+#endif
 
 static uint64_t now_ns(clockid_t clock) {
   struct timespec ts = {0};
@@ -105,6 +112,10 @@ void czg3_diag_start(const char *profile) {
   started_ns = now_ns(CLOCK_MONOTONIC);
   run_id = (started_ns << 16) ^ (uint64_t)getpid();
   profile_name = profile ? profile : "unset";
+  diag_owner_pid = getpid();
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+  czg3_race_prepare_shared();
+#endif
   long cpus = sysconf(_SC_NPROCESSORS_ONLN);
   double load = -1.0;
   FILE *load_file = fopen("/proc/loadavg", "re");
@@ -120,6 +131,12 @@ void czg3_diag_start(const char *profile) {
 void czg3_diag_event(const char *stage, int attempt,
                      enum czg3_failure failure, int cleanup_complete,
                      const char *state) {
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+  if (getpid() == diag_owner_pid && stage &&
+      strcmp(stage, "PHYSICAL_RACE_RESULT") == 0) {
+    czg3_race_flush_pending(attempt);
+  }
+#endif
   uint64_t now = now_ns(CLOCK_MONOTONIC);
   enum czg3_retry_safety safety = czg3_retry_policy(failure, cleanup_complete);
   fprintf(stdout, "RMG_DIAG_V1|run=%016llx|ts_ns=%llu|elapsed_us=%llu|stage=%s|attempt=%d|failure=%s|safety=%s|cleanup=%d|profile=%s|state=%s\n",
@@ -182,10 +199,19 @@ struct system_snapshot {
   int captured;
 };
 
-static struct role_trace race_traces[CZG3_RACE_ROLE_COUNT];
-static struct sched_snapshot sched_snapshots[SNAPSHOT_PHASES][CZG3_RACE_ROLE_COUNT];
-static struct system_snapshot system_snapshots[SNAPSHOT_PHASES];
-static int race_attempt;
+struct race_telemetry_store {
+  struct role_trace traces[CZG3_RACE_ROLE_COUNT];
+  struct sched_snapshot sched[SNAPSHOT_PHASES][CZG3_RACE_ROLE_COUNT];
+  struct system_snapshot system[SNAPSHOT_PHASES];
+  uint32_t dump_requested;
+  int race_attempt;
+  int race_pid;
+};
+
+static struct race_telemetry_store local_store;
+static struct race_telemetry_store *race_store = &local_store;
+static int race_store_initialized;
+static int race_store_shared;
 
 static const char *const race_roles[] = {
     "parent", "owner", "waiter", "consumer"
@@ -214,17 +240,37 @@ static uint64_t affinity_word0(const cpu_set_t *affinity) {
   return value;
 }
 
+static void czg3_race_prepare_shared(void) {
+  if (race_store_initialized) return;
+  race_store_initialized = 1;
+  void *mapping = mmap(NULL, sizeof(struct race_telemetry_store),
+                       PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) {
+    race_store = &local_store;
+    race_store_shared = 0;
+    memset(race_store, 0, sizeof(*race_store));
+    return;
+  }
+  race_store = (struct race_telemetry_store *)mapping;
+  race_store_shared = 1;
+  memset(race_store, 0, sizeof(*race_store));
+}
+
 void czg3_race_reset(int attempt) {
-  memset(race_traces, 0, sizeof(race_traces));
-  memset(sched_snapshots, 0, sizeof(sched_snapshots));
-  memset(system_snapshots, 0, sizeof(system_snapshots));
-  race_attempt = attempt;
+  memset(race_store, 0, sizeof(*race_store));
+  race_store->race_attempt = attempt;
 }
 
 void czg3_race_record(enum czg3_race_role role, enum czg3_race_event event,
                       int64_t arg0, int64_t arg1) {
   if ((unsigned)role >= CZG3_RACE_ROLE_COUNT) return;
-  struct role_trace *trace = &race_traces[role];
+  int expected_pid = 0;
+  int current_pid = getpid();
+  (void)__atomic_compare_exchange_n(&race_store->race_pid, &expected_pid,
+                                    current_pid, 0, __ATOMIC_RELAXED,
+                                    __ATOMIC_RELAXED);
+  struct role_trace *trace = &race_store->traces[role];
   uint32_t slot = __atomic_load_n(&trace->count, __ATOMIC_RELAXED);
   if (slot >= RACE_RECORD_CAPACITY) {
     __atomic_fetch_add(&trace->dropped, 1U, __ATOMIC_RELAXED);
@@ -246,7 +292,6 @@ void czg3_race_thread_snapshot(const char *phase,
   snapshot.tid = tid;
   snapshot.cpu = -1;
   snapshot.policy = -1;
-  snapshot.error = 0;
 
   int current_tid = (int)syscall(SYS_gettid);
   if (tid == current_tid) snapshot.cpu = sched_getcpu();
@@ -282,7 +327,7 @@ void czg3_race_thread_snapshot(const char *phase,
   }
 
   snapshot.captured = 1;
-  sched_snapshots[phase_id][role] = snapshot;
+  race_store->sched[phase_id][role] = snapshot;
 }
 
 void czg3_race_system_snapshot(const char *phase) {
@@ -301,11 +346,11 @@ void czg3_race_system_snapshot(const char *phase) {
     snapshot.rusage_available = 1;
   }
   snapshot.captured = 1;
-  system_snapshots[phase_id] = snapshot;
+  race_store->system[phase_id] = snapshot;
 }
 
 static void dump_sched_snapshot(int phase_id, enum czg3_race_role role) {
-  const struct sched_snapshot *snapshot = &sched_snapshots[phase_id][role];
+  const struct sched_snapshot *snapshot = &race_store->sched[phase_id][role];
   if (!snapshot->captured) return;
   const char *phase = phase_id == 0 ? "pre" : "post";
   fprintf(stdout,
@@ -328,7 +373,7 @@ static void dump_sched_snapshot(int phase_id, enum czg3_race_role role) {
 }
 
 static void dump_system_snapshot(int phase_id) {
-  const struct system_snapshot *snapshot = &system_snapshots[phase_id];
+  const struct system_snapshot *snapshot = &race_store->system[phase_id];
   if (!snapshot->captured) return;
   const char *phase = phase_id == 0 ? "pre_fops" : "post_fops";
   fprintf(stdout,
@@ -345,10 +390,16 @@ static void dump_system_snapshot(int phase_id) {
   }
 }
 
-void czg3_race_dump(void) {
+static void czg3_race_dump_now(int fallback_attempt) {
+  int attempt = race_store->race_attempt > 0
+                    ? race_store->race_attempt
+                    : fallback_attempt;
+  int race_pid = race_store->race_pid > 0
+                     ? race_store->race_pid
+                     : (int)diag_owner_pid;
   uint32_t dropped = 0;
   for (int role = 0; role < CZG3_RACE_ROLE_COUNT; role++) {
-    struct role_trace *trace = &race_traces[role];
+    struct role_trace *trace = &race_store->traces[role];
     uint32_t count = __atomic_load_n(&trace->count, __ATOMIC_ACQUIRE);
     dropped += __atomic_load_n(&trace->dropped, __ATOMIC_RELAXED);
     for (uint32_t i = 0; i < count; i++) {
@@ -358,7 +409,7 @@ void czg3_race_dump(void) {
                               : "invalid";
       fprintf(stdout,
               "RMG_RACE_V1|run=%016llx|attempt=%d|race=%d|role=%s|event=%s|ts_raw_ns=%llu|arg0=%lld|arg1=%lld\n",
-              (unsigned long long)run_id, race_attempt, getpid(), race_roles[role],
+              (unsigned long long)run_id, attempt, race_pid, race_roles[role],
               event, (unsigned long long)record->ts,
               (long long)record->a0, (long long)record->a1);
     }
@@ -366,7 +417,7 @@ void czg3_race_dump(void) {
 
   fprintf(stdout,
           "RMG_RACE_V1|run=%016llx|attempt=%d|race=%d|role=parent|event=trace_status|ts_raw_ns=%llu|trace_complete=%d|dropped_events=%u|mode=buffered_no_hotpath_io\n",
-          (unsigned long long)run_id, race_attempt, getpid(),
+          (unsigned long long)run_id, attempt, race_pid,
           (unsigned long long)now_ns(CLOCK_MONOTONIC_RAW), dropped == 0, dropped);
 
   for (int phase = 0; phase < SNAPSHOT_PHASES; phase++) {
@@ -376,8 +427,36 @@ void czg3_race_dump(void) {
     dump_system_snapshot(phase);
   }
   fprintf(stdout,
-          "RMG_SYS_V1|run=%016llx|phase=post_fops|kind=telemetry_mode|available=1|line=buffered_no_proc_hotpath\n",
+          "RMG_SYS_V1|run=%016llx|phase=post_fops|kind=telemetry_mode|available=1|line=buffered_shared_deferred_dump\n",
           (unsigned long long)run_id);
   fflush(stdout);
+}
+
+void czg3_race_dump(void) {
+  if (race_store_shared) {
+    __atomic_store_n(&race_store->dump_requested, 1U, __ATOMIC_RELEASE);
+    return;
+  }
+  if (getpid() == diag_owner_pid) {
+    czg3_race_dump_now(race_store->race_attempt);
+  }
+}
+
+static void czg3_race_flush_pending(int fallback_attempt) {
+  if (!race_store_shared) {
+    fprintf(stdout,
+            "RMG_RACE_V1|run=%016llx|attempt=%d|race=%d|role=parent|event=trace_status|ts_raw_ns=%llu|trace_complete=0|dropped_events=0|mode=shared_buffer_unavailable\n",
+            (unsigned long long)run_id, fallback_attempt, (int)diag_owner_pid,
+            (unsigned long long)now_ns(CLOCK_MONOTONIC_RAW));
+    fprintf(stdout,
+            "RMG_SYS_V1|run=%016llx|phase=post_fops|kind=telemetry_mode|available=0|line=shared_buffer_unavailable\n",
+            (unsigned long long)run_id);
+    return;
+  }
+
+  uint32_t requested = __atomic_exchange_n(&race_store->dump_requested, 0U,
+                                            __ATOMIC_ACQ_REL);
+  if (!requested) return;
+  czg3_race_dump_now(fallback_attempt);
 }
 #endif

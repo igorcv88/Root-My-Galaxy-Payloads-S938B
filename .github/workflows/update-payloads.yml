@@ -67,7 +67,7 @@ jobs:
           strings "$payload" | grep -F 'RMG_SCHED_V1'
           strings "$payload" | grep -F 'RMG_SYS_V1'
           strings "$payload" | grep -F 'buffered_no_hotpath_io'
-          strings "$payload" | grep -F 'buffered_no_proc_hotpath'
+          strings "$payload" | grep -F 'buffered_shared_deferred_dump'
 
       - name: Preparar KernelSU
         if: contains(inputs.atualizar, 'KernelSU')
