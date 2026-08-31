@@ -2,7 +2,11 @@
 #define OFFSET_H
 
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+#define BUILD_VARIANT_LABEL "pa3q-S938BXXSBCZG3-app-physical-p0-oracle-race-telemetry"
+#else
 #define BUILD_VARIANT_LABEL "pa3q-S938BXXSBCZG3-app-physical-p0-oracle"
+#endif
 #define APP_PHYS_P0_ORACLE 1
 #else
 #define BUILD_VARIANT_LABEL "pa3q-S938BXXSBCZG3-root-umh"

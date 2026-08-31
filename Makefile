@@ -32,6 +32,7 @@ endif
 PRELOAD := $(OUTDIR)/cve-2026-43499
 APP_PRELOAD := $(OUTDIR)/cve-2026-43499-app.so
 APP_RELEASE := $(OUTDIR)/cve-2026-43499-app.release.so
+APP_DIAGNOSTIC := $(OUTDIR)/cve-2026-43499-app.diagnostic.so
 APP_STABLE := $(OUTDIR)/cve-2026-43499-app.stable.so
 APP_RELEASE_SIZE := 104128
 ROOT_HELPER := $(OUTDIR)/cve-2026-43499-root
@@ -80,7 +81,7 @@ COMMON_CFLAGS := \
 
 .DEFAULT_GOAL := all
 
-.PHONY: all clean info release stable host-test
+.PHONY: all clean info release diagnostic stable host-test
 
 host-test:
 	mkdir -p build
@@ -91,6 +92,8 @@ host-test:
 all: $(PRELOAD) $(APP_PRELOAD) $(ROOT_HELPER)
 
 release: $(APP_RELEASE)
+
+diagnostic: $(APP_DIAGNOSTIC)
 
 stable: $(APP_STABLE)
 
@@ -120,6 +123,14 @@ $(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h s
 	@test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE)
 	truncate -s $(APP_RELEASE_SIZE) $@
 
+$(APP_DIAGNOSTIC): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
+	$(TARGET_CC) -DAPP_PAYLOAD=1 -DCZG3_RACE_TELEMETRY=1 $(APP_TARGET_CFLAGS) \
+	  -fPIC -Oz -g0 -fno-unwind-tables -fno-asynchronous-unwind-tables \
+	  -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
+	  -Wno-unused-parameter -Wno-sign-compare -Isrc \
+	  -DTARGET_HEADER='"$(TARGET_INCLUDE)"' $(TARGET_CFLAGS) \
+	  $(APP_PRELOAD_SRCS) -shared -pthread $(APP_RELEASE_LINK_FLAGS) -o $@
+
 $(APP_STABLE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 -DAPP_S928_STABLE_RACE=1 \
 	  -fPIC -Oz -g0 -fvisibility=hidden -fno-semantic-interposition \
@@ -140,6 +151,7 @@ info:
 	@echo "PRELOAD=$(PRELOAD)"
 	@echo "APP_PRELOAD=$(APP_PRELOAD)"
 	@echo "APP_RELEASE=$(APP_RELEASE)"
+	@echo "APP_DIAGNOSTIC=$(APP_DIAGNOSTIC)"
 	@echo "APP_STABLE=$(APP_STABLE)"
 	@echo "ROOT_HELPER=$(ROOT_HELPER)"
 
