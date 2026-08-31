@@ -10,6 +10,9 @@ PREFIX = (
     "https://raw.githubusercontent.com/igorcv88/"
     "Root-My-Galaxy-Payloads-S938B/main/"
 )
+KNOWN_PRE_TELEMETRY_SHA256 = (
+    "bc7dacd90796cfbf0d6e008b478072f52a1e6d5c4bf31f282a305e42ae1d6861"
+)
 EXPECTED_IDENTITY = {
     "manufacturer": "samsung",
     "model": "SM-S938B",
@@ -105,15 +108,20 @@ def main() -> None:
     exploit = validate_artifact(target["exploit"])
     validate_artifact(target["kernelsu"])
     exploit_bytes = exploit.read_bytes()
+    exploit_digest = sha256(exploit)
     assert exploit_bytes != legacy_exploit.read_bytes(), (
         "v2 legacy and v3 payloads unexpectedly became identical"
     )
-    assert b"RMG_RACE_V1" not in exploit_bytes, (
-        "canonical CZG3 payload must not contain scheduler-sensitive race telemetry"
-    )
-    assert b"RMG_SYS_V1" not in exploit_bytes, (
-        "canonical CZG3 payload must not contain heavy system snapshot telemetry"
-    )
+
+    # The known 104128-byte CZG3 payload is allowed only as the last-good
+    # pre-publication fallback. Every newly generated canonical payload must
+    # retain the diagnostic protocol rather than solving regressions by
+    # deleting telemetry.
+    if exploit_digest != KNOWN_PRE_TELEMETRY_SHA256:
+        for marker in (b"RMG_RACE_V1", b"RMG_SCHED_V1", b"RMG_SYS_V1"):
+            assert marker in exploit_bytes, (
+                f"canonical CZG3 v3 payload is missing {marker.decode()}"
+            )
 
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/target.h").is_file()
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h").is_file()

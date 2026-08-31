@@ -60,4 +60,53 @@ void czg3_diag_event(const char *stage, int attempt,
                      const char *state);
 void czg3_diag_checkpoint(const char *stage, int attempt);
 
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+enum czg3_race_role {
+  CZG3_RACE_PARENT,
+  CZG3_RACE_OWNER,
+  CZG3_RACE_WAITER,
+  CZG3_RACE_CONSUMER,
+  CZG3_RACE_ROLE_COUNT
+};
+
+enum czg3_race_event {
+  CZG3_RACE_THREAD_READY,
+  CZG3_RACE_PSELECT_PREPARE_COMPLETE,
+  CZG3_RACE_PSELECT_ENTER,
+  CZG3_RACE_PSELECT_RETURN,
+  CZG3_RACE_OWNER_TARGET_LOCKED,
+  CZG3_RACE_OWNER_CHAIN_LOCK_ENTER,
+  CZG3_RACE_OWNER_CHAIN_LOCK_RETURN,
+  CZG3_RACE_CMP_ENTER,
+  CZG3_RACE_CMP_RETURN,
+  CZG3_RACE_WAIT_REQUEUE_ENTER,
+  CZG3_RACE_WAIT_REQUEUE_RETURN,
+  CZG3_RACE_WAITER_TIMEOUT_ACCEPTED,
+  CZG3_RACE_WAITER_UNLOCK_ENTER,
+  CZG3_RACE_WAITER_UNLOCK_RETURN,
+  CZG3_RACE_WRITER_ENTER,
+  CZG3_RACE_WRITER_RETURN,
+  CZG3_RACE_CONSUMER_ARMED,
+  CZG3_RACE_DELAY_BEGIN,
+  CZG3_RACE_DELAY_END,
+  CZG3_RACE_CONSUMER_ACTION_BEGIN,
+  CZG3_RACE_READINESS_OPERATION_COMPLETE,
+  CZG3_RACE_CONSUMER_ACTION_END
+};
+
+void czg3_race_reset(int attempt);
+void czg3_race_record(enum czg3_race_role role, enum czg3_race_event event,
+                      int64_t arg0, int64_t arg1);
+void czg3_race_dump(void);
+void czg3_race_system_snapshot(const char *phase);
+void czg3_race_thread_snapshot(const char *phase,
+                               enum czg3_race_role role, int tid);
+#else
+#define czg3_race_reset(attempt) ((void)0)
+#define czg3_race_record(role, event, arg0, arg1) ((void)0)
+#define czg3_race_dump() ((void)0)
+#define czg3_race_system_snapshot(phase) ((void)0)
+#define czg3_race_thread_snapshot(phase, role, tid) ((void)0)
+#endif
+
 #endif

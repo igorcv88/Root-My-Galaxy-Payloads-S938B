@@ -8,6 +8,11 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+#include <sched.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#endif
 
 static uint64_t run_id;
 static uint64_t started_ns;
@@ -82,7 +87,7 @@ void czg3_timing_init(struct czg3_timing *t, int baseline, int minimum,
 
 int czg3_timing_clean_miss(struct czg3_timing *t, int direction) {
   if (direction != -1 && direction != 1)
-    return t->current_usec; /* no measured direction: do not invent one */
+    return t->current_usec;
   int next = t->current_usec + direction * 250;
   if (next < t->minimum_usec) next = t->minimum_usec;
   if (next > t->maximum_usec) next = t->maximum_usec;
@@ -136,3 +141,243 @@ void czg3_diag_checkpoint(const char *stage, int attempt) {
     (void)close(fd);
   }
 }
+
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+#define RACE_RECORD_CAPACITY 64
+#define SNAPSHOT_PHASES 2
+
+struct race_record {
+  uint64_t ts;
+  int64_t a0;
+  int64_t a1;
+  uint16_t event;
+};
+
+struct role_trace {
+  struct race_record records[RACE_RECORD_CAPACITY];
+  uint32_t count;
+  uint32_t dropped;
+};
+
+struct sched_snapshot {
+  uint64_t ts;
+  uint64_t affinity0;
+  long voluntary_switches;
+  long involuntary_switches;
+  int tid;
+  int cpu;
+  int policy;
+  int available;
+  int error;
+  int rusage_available;
+  int captured;
+};
+
+struct system_snapshot {
+  uint64_t ts;
+  long online_cpus;
+  long voluntary_switches;
+  long involuntary_switches;
+  int rusage_available;
+  int captured;
+};
+
+static struct role_trace race_traces[CZG3_RACE_ROLE_COUNT];
+static struct sched_snapshot sched_snapshots[SNAPSHOT_PHASES][CZG3_RACE_ROLE_COUNT];
+static struct system_snapshot system_snapshots[SNAPSHOT_PHASES];
+static int race_attempt;
+
+static const char *const race_roles[] = {
+    "parent", "owner", "waiter", "consumer"
+};
+
+static const char *const race_events[] = {
+    "thread_ready", "pselect_prepare_complete", "pselect_enter", "pselect_return",
+    "owner_target_locked", "owner_chain_lock_enter", "owner_chain_lock_return",
+    "cmp_enter", "cmp_return", "wait_requeue_pi_enter", "wait_requeue_pi_return",
+    "waiter_timeout_accepted", "waiter_unlock_enter", "waiter_unlock_return",
+    "writer_enter", "writer_return", "consumer_armed", "delay_begin", "delay_end",
+    "consumer_action_begin", "readiness_operation_complete", "consumer_action_end"
+};
+
+static int phase_index(const char *phase) {
+  if (!phase) return -1;
+  if (strncmp(phase, "pre", 3) == 0) return 0;
+  if (strncmp(phase, "post", 4) == 0) return 1;
+  return -1;
+}
+
+static uint64_t affinity_word0(const cpu_set_t *affinity) {
+  uint64_t value = 0;
+  size_t bytes = sizeof(value) < sizeof(*affinity) ? sizeof(value) : sizeof(*affinity);
+  memcpy(&value, affinity, bytes);
+  return value;
+}
+
+void czg3_race_reset(int attempt) {
+  memset(race_traces, 0, sizeof(race_traces));
+  memset(sched_snapshots, 0, sizeof(sched_snapshots));
+  memset(system_snapshots, 0, sizeof(system_snapshots));
+  race_attempt = attempt;
+}
+
+void czg3_race_record(enum czg3_race_role role, enum czg3_race_event event,
+                      int64_t arg0, int64_t arg1) {
+  if ((unsigned)role >= CZG3_RACE_ROLE_COUNT) return;
+  struct role_trace *trace = &race_traces[role];
+  uint32_t slot = __atomic_load_n(&trace->count, __ATOMIC_RELAXED);
+  if (slot >= RACE_RECORD_CAPACITY) {
+    __atomic_fetch_add(&trace->dropped, 1U, __ATOMIC_RELAXED);
+    return;
+  }
+  trace->records[slot] = (struct race_record){
+      now_ns(CLOCK_MONOTONIC_RAW), arg0, arg1, (uint16_t)event};
+  __atomic_store_n(&trace->count, slot + 1U, __ATOMIC_RELEASE);
+}
+
+void czg3_race_thread_snapshot(const char *phase,
+                               enum czg3_race_role role, int tid) {
+  int phase_id = phase_index(phase);
+  if (phase_id < 0 || (unsigned)role >= CZG3_RACE_ROLE_COUNT || tid <= 0) return;
+
+  struct sched_snapshot snapshot;
+  memset(&snapshot, 0, sizeof(snapshot));
+  snapshot.ts = now_ns(CLOCK_MONOTONIC_RAW);
+  snapshot.tid = tid;
+  snapshot.cpu = -1;
+  snapshot.policy = -1;
+  snapshot.error = 0;
+
+  int current_tid = (int)syscall(SYS_gettid);
+  if (tid == current_tid) snapshot.cpu = sched_getcpu();
+
+  cpu_set_t affinity;
+  CPU_ZERO(&affinity);
+  errno = 0;
+  if (sched_getaffinity(tid, sizeof(affinity), &affinity) == 0) {
+    snapshot.affinity0 = affinity_word0(&affinity);
+    snapshot.available = 1;
+  } else {
+    snapshot.error = errno;
+  }
+
+  errno = 0;
+  int policy = sched_getscheduler(tid);
+  if (policy >= 0) {
+    snapshot.policy = policy;
+    snapshot.available = 1;
+  } else if (!snapshot.error) {
+    snapshot.error = errno;
+  }
+
+  if (tid == current_tid) {
+    struct rusage usage;
+    memset(&usage, 0, sizeof(usage));
+    if (getrusage(RUSAGE_THREAD, &usage) == 0) {
+      snapshot.voluntary_switches = usage.ru_nvcsw;
+      snapshot.involuntary_switches = usage.ru_nivcsw;
+      snapshot.rusage_available = 1;
+      snapshot.available = 1;
+    }
+  }
+
+  snapshot.captured = 1;
+  sched_snapshots[phase_id][role] = snapshot;
+}
+
+void czg3_race_system_snapshot(const char *phase) {
+  int phase_id = phase_index(phase);
+  if (phase_id < 0) return;
+
+  struct system_snapshot snapshot;
+  memset(&snapshot, 0, sizeof(snapshot));
+  snapshot.ts = now_ns(CLOCK_MONOTONIC_RAW);
+  snapshot.online_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  struct rusage usage;
+  memset(&usage, 0, sizeof(usage));
+  if (getrusage(RUSAGE_SELF, &usage) == 0) {
+    snapshot.voluntary_switches = usage.ru_nvcsw;
+    snapshot.involuntary_switches = usage.ru_nivcsw;
+    snapshot.rusage_available = 1;
+  }
+  snapshot.captured = 1;
+  system_snapshots[phase_id] = snapshot;
+}
+
+static void dump_sched_snapshot(int phase_id, enum czg3_race_role role) {
+  const struct sched_snapshot *snapshot = &sched_snapshots[phase_id][role];
+  if (!snapshot->captured) return;
+  const char *phase = phase_id == 0 ? "pre" : "post";
+  fprintf(stdout,
+          "RMG_SCHED_V1|run=%016llx|phase=%s|role=%s|tid=%d|cpu=%d|policy=%d|priority=-1|nice=-1|available=%d|errno=%d|affinity0=%016llx|ts_raw_ns=%llu|mode=buffered\n",
+          (unsigned long long)run_id, phase, race_roles[role], snapshot->tid,
+          snapshot->cpu, snapshot->policy, snapshot->available, snapshot->error,
+          (unsigned long long)snapshot->affinity0,
+          (unsigned long long)snapshot->ts);
+
+  if (snapshot->rusage_available) {
+    fprintf(stdout,
+            "RMG_SYS_V1|run=%016llx|phase=%s|kind=%s_sched|available=1|line=nr_voluntary_switches : %ld\n",
+            (unsigned long long)run_id, phase, race_roles[role],
+            snapshot->voluntary_switches);
+    fprintf(stdout,
+            "RMG_SYS_V1|run=%016llx|phase=%s|kind=%s_sched|available=1|line=nr_involuntary_switches : %ld\n",
+            (unsigned long long)run_id, phase, race_roles[role],
+            snapshot->involuntary_switches);
+  }
+}
+
+static void dump_system_snapshot(int phase_id) {
+  const struct system_snapshot *snapshot = &system_snapshots[phase_id];
+  if (!snapshot->captured) return;
+  const char *phase = phase_id == 0 ? "pre_fops" : "post_fops";
+  fprintf(stdout,
+          "RMG_SYS_V1|run=%016llx|phase=%s|kind=online_cpus|available=%d|line=%ld|ts_raw_ns=%llu|mode=buffered\n",
+          (unsigned long long)run_id, phase, snapshot->online_cpus > 0,
+          snapshot->online_cpus, (unsigned long long)snapshot->ts);
+  if (snapshot->rusage_available) {
+    fprintf(stdout,
+            "RMG_SYS_V1|run=%016llx|phase=%s|kind=process_rusage|available=1|line=voluntary_ctxt_switches: %ld\n",
+            (unsigned long long)run_id, phase, snapshot->voluntary_switches);
+    fprintf(stdout,
+            "RMG_SYS_V1|run=%016llx|phase=%s|kind=process_rusage|available=1|line=nonvoluntary_ctxt_switches: %ld\n",
+            (unsigned long long)run_id, phase, snapshot->involuntary_switches);
+  }
+}
+
+void czg3_race_dump(void) {
+  uint32_t dropped = 0;
+  for (int role = 0; role < CZG3_RACE_ROLE_COUNT; role++) {
+    struct role_trace *trace = &race_traces[role];
+    uint32_t count = __atomic_load_n(&trace->count, __ATOMIC_ACQUIRE);
+    dropped += __atomic_load_n(&trace->dropped, __ATOMIC_RELAXED);
+    for (uint32_t i = 0; i < count; i++) {
+      const struct race_record *record = &trace->records[i];
+      const char *event = record->event < sizeof(race_events) / sizeof(race_events[0])
+                              ? race_events[record->event]
+                              : "invalid";
+      fprintf(stdout,
+              "RMG_RACE_V1|run=%016llx|attempt=%d|race=%d|role=%s|event=%s|ts_raw_ns=%llu|arg0=%lld|arg1=%lld\n",
+              (unsigned long long)run_id, race_attempt, getpid(), race_roles[role],
+              event, (unsigned long long)record->ts,
+              (long long)record->a0, (long long)record->a1);
+    }
+  }
+
+  fprintf(stdout,
+          "RMG_RACE_V1|run=%016llx|attempt=%d|race=%d|role=parent|event=trace_status|ts_raw_ns=%llu|trace_complete=%d|dropped_events=%u|mode=buffered_no_hotpath_io\n",
+          (unsigned long long)run_id, race_attempt, getpid(),
+          (unsigned long long)now_ns(CLOCK_MONOTONIC_RAW), dropped == 0, dropped);
+
+  for (int phase = 0; phase < SNAPSHOT_PHASES; phase++) {
+    for (int role = 0; role < CZG3_RACE_ROLE_COUNT; role++) {
+      dump_sched_snapshot(phase, (enum czg3_race_role)role);
+    }
+    dump_system_snapshot(phase);
+  }
+  fprintf(stdout,
+          "RMG_SYS_V1|run=%016llx|phase=post_fops|kind=telemetry_mode|available=1|line=buffered_no_proc_hotpath\n",
+          (unsigned long long)run_id);
+  fflush(stdout);
+}
+#endif

@@ -63,11 +63,11 @@ jobs:
           make TARGET="$TARGET" ANDROID_NDK_HOME="$ANDROID_NDK_HOME" release
           payload="build/$TARGET/cve-2026-43499-app.release.so"
           test -s "$payload"
-          test "$(stat -c %s "$payload")" -eq 104128
-          if strings "$payload" | grep -E 'RMG_RACE_V1|RMG_SYS_V1'; then
-            echo "O payload canônico não pode conter telemetria que perturbe a corrida." >&2
-            exit 1
-          fi
+          strings "$payload" | grep -F 'RMG_RACE_V1'
+          strings "$payload" | grep -F 'RMG_SCHED_V1'
+          strings "$payload" | grep -F 'RMG_SYS_V1'
+          strings "$payload" | grep -F 'buffered_no_hotpath_io'
+          strings "$payload" | grep -F 'buffered_no_proc_hotpath'
 
       - name: Preparar KernelSU
         if: contains(inputs.atualizar, 'KernelSU')
@@ -172,13 +172,32 @@ jobs:
 
           if "Exploit" in mode:
               source = root / "build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.release.so"
-              dest = destination(target["exploit"]["url"])
-              dest.parent.mkdir(parents=True, exist_ok=True)
-              shutil.copy2(source, dest)
-              size, digest = metadata(dest)
-              target["exploit"]["size"] = size
-              target["exploit"]["sha256"] = digest
-              print(f"Exploit: {dest.relative_to(root)} ({size} bytes, {digest})")
+              source_size, source_digest = metadata(source)
+              current = target["exploit"]
+              if (
+                  source_size == current.get("size") and
+                  source_digest == current.get("sha256", "").lower()
+              ):
+                  print("Exploit: sem alteração binária")
+              else:
+                  versions = []
+                  pattern = re.compile(r"^pa3q-S938BXXSBCZG3-v(\d{4})$")
+                  artifacts = root / "artifacts"
+                  for entry in artifacts.iterdir():
+                      if not entry.is_dir():
+                          continue
+                      match = pattern.fullmatch(entry.name)
+                      if match:
+                          versions.append(int(match.group(1)))
+                  next_version = max(versions, default=267) + 1
+                  dest = artifacts / f"pa3q-S938BXXSBCZG3-v{next_version:04d}" / "cve-2026-43499-app.so"
+                  dest.parent.mkdir(parents=True, exist_ok=False)
+                  shutil.copy2(source, dest)
+                  size, digest = metadata(dest)
+                  target["exploit"]["url"] = prefix + dest.relative_to(root).as_posix()
+                  target["exploit"]["size"] = size
+                  target["exploit"]["sha256"] = digest
+                  print(f"Exploit: {dest.relative_to(root)} ({size} bytes, {digest})")
 
           if "KernelSU" in mode:
               source = root / "out/ksud-s25u-kdp-v3.3.0"
