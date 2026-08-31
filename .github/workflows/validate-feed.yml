@@ -105,9 +105,9 @@ jobs:
               assert digest(path) == expected_sha256
 
           synced = local_path(target["exploit"]["url"])
-          assert synced == root / "artifacts/pa3q-S938BXXSBCZG3-v0265/cve-2026-43499-app.so"
+          assert synced == root / "artifacts/pa3q-S938BXXSBCZG3-v0266/cve-2026-43499-app.so"
           assert target["exploit"]["sha256"] == (
-              "1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303"
+              "41c8e461da058607a66c229d2ed7b8204b8c2cf63aa349c1d0d235d3d12a4cd8"
           )
           assert target["kernelsu"]["sha256"] == (
               "5a009f1fc58b25a6e197d8ec951a86ec11a9b5ec9d56bdb5f7a3410a22b9b48a"
