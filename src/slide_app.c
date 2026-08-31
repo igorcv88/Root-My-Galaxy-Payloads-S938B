@@ -1120,7 +1120,7 @@ RMG_RACE_INLINE void slide_pselect_stack_copy(void) {
   fd_set ex;
   prepare_slide_pselect_fdsets(&in, &out, &ex);
   open_slide_selected_fds(&in, &out, &ex, high_read);
-  czg3_race_record(CZG3_RACE_PARENT, CZG3_RACE_PSELECT_PREPARE_COMPLETE, 0, 0);
+  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_PSELECT_PREPARE_COMPLETE, 0, 0);
 
   slide_reset_consume_state();
 
@@ -1155,13 +1155,13 @@ RMG_RACE_INLINE void slide_pselect_stack_copy(void) {
   atomic_store(&slide_consume_go, 1);
 #endif
   errno = 0;
-  czg3_race_record(CZG3_RACE_PARENT, CZG3_RACE_PSELECT_ENTER, 0, 0);
+  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_PSELECT_ENTER, 0, 0);
   int ret = (int)syscall(SYS_pselect6, slide_route_nfds,
                          &in, &out, &ex, timeoutp, NULL);
   int saved_errno = errno;
   size_t pselect_elapsed_usec =
       (gettime_ns() - pselect_started) / 1000ULL;
-  czg3_race_record(CZG3_RACE_PARENT, CZG3_RACE_PSELECT_RETURN,
+  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_PSELECT_RETURN,
                    ret, saved_errno);
 #if defined(APP_S928_ROUTE_DIAG) && APP_S928_ROUTE_DIAG
   atomic_store(&slide_pselect_last_ret, ret);
@@ -1842,6 +1842,8 @@ void *slide_consumer_thread(void *arg __attribute__((unused))) {
     while (atomic_load(&slide_consume_go)) {
       __asm__ volatile("yield" ::: "memory");
     }
+    czg3_race_thread_snapshot("post", CZG3_RACE_CONSUMER,
+                              consumer_tid);
     return NULL;
   }
 }
@@ -2154,6 +2156,14 @@ static int slide_child_trigger_write(void) {
   czg3_race_record(CZG3_RACE_PARENT, CZG3_RACE_CMP_RETURN,
                    requeue_ret, requeue_errno);
   if (requeue_ret != -1 || requeue_errno != EDEADLK) {
+    czg3_race_thread_snapshot("post", CZG3_RACE_PARENT,
+                              (int)syscall(SYS_gettid));
+    czg3_race_thread_snapshot("post", CZG3_RACE_WAITER,
+                              atomic_load(&slide_waiter_tid));
+    czg3_race_thread_snapshot("post", CZG3_RACE_OWNER,
+                              atomic_load(&slide_owner_tid));
+    czg3_race_system_snapshot("post_fops");
+    czg3_race_dump();
     return 0;
   }
   pr_info("slide pi stage=deadlock-accepted\n");
@@ -2167,8 +2177,6 @@ static int slide_child_trigger_write(void) {
                             atomic_load(&slide_waiter_tid));
   czg3_race_thread_snapshot("post", CZG3_RACE_OWNER,
                             atomic_load(&slide_owner_tid));
-  czg3_race_thread_snapshot("post", CZG3_RACE_CONSUMER,
-                            atomic_load(&slide_consumer_tid));
   czg3_race_system_snapshot("post_fops");
   czg3_race_dump();
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE

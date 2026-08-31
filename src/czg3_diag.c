@@ -10,6 +10,7 @@
 #include <unistd.h>
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
 #include <sched.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -149,6 +150,7 @@ void czg3_diag_checkpoint(const char *stage, int attempt) {
 struct race_record { uint64_t ts; int64_t a0; int64_t a1; uint16_t event; };
 struct role_trace { struct race_record records[RACE_RECORD_CAPACITY]; uint32_t count; uint32_t dropped; };
 static struct role_trace race_traces[CZG3_RACE_ROLE_COUNT];
+static pthread_mutex_t race_trace_lock = PTHREAD_MUTEX_INITIALIZER;
 static int race_attempt;
 static const char *const race_roles[] = {"parent", "owner", "waiter", "consumer"};
 static const char *const race_events[] = {
@@ -160,19 +162,31 @@ static const char *const race_events[] = {
   "consumer_action_begin", "readiness_operation_complete", "consumer_action_end"
 };
 
-void czg3_race_reset(int attempt) { memset(race_traces, 0, sizeof(race_traces)); race_attempt = attempt; }
+void czg3_race_reset(int attempt) {
+  pthread_mutex_lock(&race_trace_lock);
+  memset(race_traces, 0, sizeof(race_traces));
+  race_attempt = attempt;
+  pthread_mutex_unlock(&race_trace_lock);
+}
 
 void czg3_race_record(enum czg3_race_role role, enum czg3_race_event event,
                       int64_t arg0, int64_t arg1) {
   if ((unsigned)role >= CZG3_RACE_ROLE_COUNT) return;
+  pthread_mutex_lock(&race_trace_lock);
   struct role_trace *trace = &race_traces[role];
   uint32_t slot = trace->count;
-  if (slot >= RACE_RECORD_CAPACITY) { trace->dropped++; return; }
+  if (slot >= RACE_RECORD_CAPACITY) {
+    trace->dropped++;
+    pthread_mutex_unlock(&race_trace_lock);
+    return;
+  }
   trace->records[slot] = (struct race_record){now_ns(CLOCK_MONOTONIC_RAW), arg0, arg1, (uint16_t)event};
   trace->count = slot + 1;
+  pthread_mutex_unlock(&race_trace_lock);
 }
 
 void czg3_race_dump(void) {
+  pthread_mutex_lock(&race_trace_lock);
   uint32_t dropped = 0;
   for (int role = 0; role < CZG3_RACE_ROLE_COUNT; role++) {
     struct role_trace *trace = &race_traces[role]; dropped += trace->dropped;
@@ -187,6 +201,7 @@ void czg3_race_dump(void) {
   fprintf(stdout, "RMG_RACE_V1|run=%016llx|attempt=%d|race=%d|role=parent|event=trace_status|ts_raw_ns=%llu|trace_complete=%d|dropped_events=%u\n",
           (unsigned long long)run_id, race_attempt, getpid(),
           (unsigned long long)now_ns(CLOCK_MONOTONIC_RAW), dropped == 0, dropped);
+  pthread_mutex_unlock(&race_trace_lock);
 }
 
 static void dump_file(const char *phase, const char *kind, const char *path, int max_lines) {
@@ -229,9 +244,29 @@ void czg3_race_system_snapshot(const char *phase) {
   }
 }
 
+static int task_cpu(int tid) {
+  char path[128], line[SNAPSHOT_LINE_CAPACITY];
+  snprintf(path, sizeof(path), "/proc/self/task/%d/stat", tid);
+  FILE *file = fopen(path, "re");
+  if (!file || !fgets(line, sizeof(line), file)) {
+    if (file) fclose(file);
+    return -1;
+  }
+  fclose(file);
+  char *cursor = strrchr(line, ')');
+  if (!cursor || cursor[1] != ' ') return -1;
+  int field = 3;
+  char *save = NULL;
+  for (char *value = strtok_r(cursor + 2, " ", &save); value;
+       value = strtok_r(NULL, " ", &save), field++) {
+    if (field == 39) return (int)strtol(value, NULL, 10);
+  }
+  return -1;
+}
+
 void czg3_race_thread_snapshot(const char *phase, enum czg3_race_role role, int tid) {
   char path[128], kind[64]; cpu_set_t affinity; CPU_ZERO(&affinity);
-  int cpu = sched_getcpu(), policy = sched_getscheduler(tid), affinity_ok = sched_getaffinity(tid, sizeof(affinity), &affinity) == 0;
+  int cpu = task_cpu(tid), policy = sched_getscheduler(tid), affinity_ok = sched_getaffinity(tid, sizeof(affinity), &affinity) == 0;
   struct sched_param param = {0}; int param_ok = sched_getparam(tid, &param) == 0;
   errno = 0; int nice_value = getpriority(PRIO_PROCESS, (id_t)tid); int nice_errno = errno;
   fprintf(stdout, "RMG_SCHED_V1|run=%016llx|phase=%s|role=%s|tid=%d|cpu=%d|policy=%d|priority=%d|nice=%d|available=%d|errno=%d|affinity0=%016llx\n",
