@@ -30,6 +30,8 @@ int main(void) {
          CZG3_SUPERVISOR_REBOOT_REQUIRED);
   assert(czg3_supervisor_decide(1, CZG3_WRITER_VERIFIED_SUCCESS) ==
          CZG3_SUPERVISOR_COMPLETE);
+  assert(czg3_supervisor_decide(0, CZG3_WRITER_VERIFIED_SUCCESS) ==
+         CZG3_SUPERVISOR_REBOOT_REQUIRED);
   struct czg3_timing t;
   czg3_timing_init(&t, 50000, 49000, 51000);
   for (int i = 0; i < 20; i++) czg3_timing_clean_miss(&t, 1);

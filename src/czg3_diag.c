@@ -61,8 +61,10 @@ enum czg3_retry_safety czg3_writer_retry_policy(
 
 enum czg3_supervisor_decision czg3_supervisor_decide(
     int child_succeeded, enum czg3_writer_phase phase) {
-  if (child_succeeded || phase == CZG3_WRITER_VERIFIED_SUCCESS)
+  if (child_succeeded)
     return CZG3_SUPERVISOR_COMPLETE;
+  if (phase == CZG3_WRITER_VERIFIED_SUCCESS)
+    return CZG3_SUPERVISOR_REBOOT_REQUIRED;
   return czg3_writer_retry_policy(phase) == CZG3_SAFE_RETRY
              ? CZG3_SUPERVISOR_RETRY
              : CZG3_SUPERVISOR_REBOOT_REQUIRED;

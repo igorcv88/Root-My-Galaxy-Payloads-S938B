@@ -57,7 +57,14 @@ void app_publish_p0_dirty(void) {
 
 void app_publish_writer_armed(void) {
   if (!app_p0_state) return;
-  atomic_store(&app_p0_state->writer_state, CZG3_WRITER_ARMED);
+  int expected = CZG3_WRITER_NOT_ARMED;
+  if (atomic_compare_exchange_strong(&app_p0_state->writer_state, &expected,
+                                     CZG3_WRITER_ARMED)) {
+    return;
+  }
+  expected = CZG3_WRITER_CLEAN_PRE_ENTRY_MISS;
+  atomic_compare_exchange_strong(&app_p0_state->writer_state, &expected,
+                                 CZG3_WRITER_ARMED);
 }
 
 void app_publish_writer_entered(void) {
@@ -81,8 +88,12 @@ void app_publish_writer_returned(int child_status) {
 
 void app_publish_writer_possible_mutation(void) {
   if (!app_p0_state) return;
-  atomic_store(&app_p0_state->writer_state,
-               CZG3_WRITER_POSSIBLE_MUTATION);
+  int state = atomic_load(&app_p0_state->writer_state);
+  while (state != CZG3_WRITER_POSSIBLE_MUTATION &&
+         state != CZG3_WRITER_VERIFIED_SUCCESS &&
+         !atomic_compare_exchange_weak(&app_p0_state->writer_state, &state,
+                                       CZG3_WRITER_POSSIBLE_MUTATION)) {
+  }
 }
 
 void app_publish_writer_verified_success(void) {
@@ -280,7 +291,7 @@ __attribute__((constructor)) static void load(void) {
                 (WIFSIGNALED(status) ? WTERMSIG(status) : status),
             writer_decision == CZG3_SUPERVISOR_RETRY,
             writer_decision == CZG3_SUPERVISOR_REBOOT_REQUIRED);
-    if (writer_decision == CZG3_SUPERVISOR_REBOOT_REQUIRED) {
+    if (writer_decision != CZG3_SUPERVISOR_RETRY) {
       pr_error("writer route outcome is mutation-uncertain; refusing retry "
                "on this boot (reboot required)\n");
       break;
