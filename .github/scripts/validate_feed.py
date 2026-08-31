@@ -57,6 +57,8 @@ def validate_artifact(artifact: dict) -> pathlib.Path:
 
 
 def main() -> None:
+    # v2 remains frozen only for legacy compatibility. New app/manual/Auto Root
+    # behavior is driven exclusively by the single v3 feed below.
     v2 = json.loads((ROOT / "support/targets-v2.json").read_text(encoding="utf-8"))
     assert v2.get("schemaVersion") == 2
     assert len(v2.get("targets", [])) == 1, "legacy v2 feed must remain S938B-only"
@@ -90,9 +92,7 @@ def main() -> None:
     assert isinstance(payloads, list) and payloads, "v3 feed must contain payloads"
 
     ids = [payload.get("payloadId") for payload in payloads]
-    assert all(isinstance(payload_id, str) and payload_id for payload_id in ids), (
-        "every v3 payload must have a non-empty payloadId"
-    )
+    assert all(isinstance(payload_id, str) and payload_id for payload_id in ids)
     assert len(ids) == len(set(ids)), "v3 payloadIds must be unique"
 
     matches = [payload for payload in payloads if payload.get("payloadId") == "pa3q-S938BXXSBCZG3"]
@@ -107,23 +107,13 @@ def main() -> None:
     assert exploit.read_bytes() != legacy_exploit.read_bytes(), (
         "v2 legacy and v3 payloads unexpectedly became identical"
     )
-
-    diagnostic = json.loads(
-        (ROOT / "support/targets-v3-diagnostic.json").read_text(encoding="utf-8")
+    assert b"RMG_RACE_V1" in exploit.read_bytes(), (
+        "canonical CZG3 v3 payload is missing race telemetry"
     )
-    assert diagnostic.get("schemaVersion") == 3
-    diagnostic_payloads = diagnostic.get("payloads", [])
-    assert len(diagnostic_payloads) == 1
-    diagnostic_target = diagnostic_payloads[0]
-    assert diagnostic_target["payloadId"] == "pa3q-S938BXXSBCZG3-diagnostic"
-    assert diagnostic_target["exactMatch"] == EXPECTED_IDENTITY
-    diagnostic_exploit = validate_artifact(diagnostic_target["exploit"])
-    validate_artifact(diagnostic_target["kernelsu"])
-    assert diagnostic_exploit.read_bytes() != exploit.read_bytes()
 
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/target.h").is_file()
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h").is_file()
-    print(f"Payload feed is valid ({len(payloads)} profile(s); CZG3 exact checks passed)")
+    print(f"Payload feed is valid ({len(payloads)} profile(s); one canonical CZG3 v3 payload)")
 
 
 if __name__ == "__main__":
