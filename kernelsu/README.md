@@ -76,8 +76,7 @@ and version `32525-2`. The older A15 5.10 pair remains device-untested.
 
 The CZG3 payload was forward-ported from the clean official `v3.3.0` tag at
 `932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e`. The version calculation from the
-patched source checkout produced `KSU_VERSION=32602`; the userspace build reports
-`3.3.0-1-g25008801` and version code `32602`. Manager and driver version codes are
+patched working tree produced `KSU_VERSION=32601`; the userspace build is produced from the official v3.3.0 commit count and embeds version code `32601`. Manager and driver version codes are
 not assumed to be identical. The complete source delta is
 [`patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch`](patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch); the v3.2.5 patch remains unchanged as history.
 
@@ -118,11 +117,11 @@ Published CZG3 artifacts (stored as ordinary Git blobs so commit-pinned raw URLs
 ```text
 android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
 size: 332416
-SHA-256: 57e7210056f67c408f1887b0b2e7ec25a518d7a11e526bea0dc40eebdeb7a443
+SHA-256: 49ea9b561e29dd4f73d626c76978ac5b87d4bbd8f43b607e3b43186385875d8d
 
 ksud-s25u-kdp-v3.3.0
-size: 5095544
-SHA-256: cc246036a6881ee72ac52340220e64c6f6993f9c28f5fe2ea60035b4399bf503
+size: 5096104
+SHA-256: 5a009f1fc58b25a6e197d8ec951a86ec11a9b5ec9d56bdb5f7a3410a22b9b48a
 ```
 
 Static validation confirmed AArch64 ELF64, exact vermagic, 215 undefined symbols

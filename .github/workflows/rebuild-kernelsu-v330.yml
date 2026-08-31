@@ -3,16 +3,19 @@ name: Rebuild CZG3 KernelSU v3.3.0 artifacts
 on:
   push:
     branches:
-      - repair/rebuild-kernelsu-v330-official-version
+      - repair/publish-kernelsu-v330-32601
     paths:
       - .github/workflows/rebuild-kernelsu-v330.yml
+      - kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch
+      - kernelsu/patches/KernelSU-v3.3.0-s938b-staged-daemon-hotfix.patch
+      - kernelsu/patches/apply-v330-staged-daemon-hotfix.py
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: rebuild-czg3-kernelsu-v330-official-version
+  group: rebuild-czg3-kernelsu-v330-32601
   cancel-in-progress: false
 
 env:
@@ -21,10 +24,51 @@ env:
   TARGET_RELEASE: 6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k
   MODULE_NAME: android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
   KSUD_NAME: ksud-s25u-kdp-v3.3.0
+  PUBLISH_BRANCH: repair/publish-kernelsu-v330-32601
 
 jobs:
+  patch-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout payload repository
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Checkout exact KernelSU v3.3.0 source
+        run: |
+          set -euxo pipefail
+          git clone "$KSU_REPO" /tmp/KernelSU
+          cd /tmp/KernelSU
+          git checkout --detach "$KSU_TAG_SHA"
+          test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
+
+      - name: Apply Samsung CZG3 forward-port
+        run: |
+          set -euxo pipefail
+          cd /tmp/KernelSU
+          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
+
+      - name: Apply staged-daemon late-load hotfix
+        run: |
+          set -euxo pipefail
+          cd /tmp/KernelSU
+          python3 "$GITHUB_WORKSPACE/kernelsu/patches/apply-v330-staged-daemon-hotfix.py"
+
+      - name: Verify staged-daemon handoff
+        run: |
+          set -euxo pipefail
+          cd /tmp/KernelSU
+          grep -F 'stage_daemon_from("/data/local/tmp/.ksud-stage")' userspace/ksud/src/late_load.rs
+          grep -F 'Failed to stage the pre-uploaded ksud' userspace/ksud/src/late_load.rs
+          grep -F 'pub fn stage_daemon_from' userspace/ksud/src/utils.rs
+          test -n "$(git status --porcelain)"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
+
   module:
     runs-on: ubuntu-latest
+    needs: patch-preflight
     container:
       image: ghcr.io/ylarod/ddk-min:android15-6.6-20260828
       options: --privileged
@@ -43,13 +87,10 @@ jobs:
           cd /tmp/KernelSU
           git checkout --detach "$KSU_TAG_SHA"
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
-
-          # Important: apply the Samsung port as working-tree changes only.
-          # KernelSU derives KSU_VERSION from the git commit count, so creating a
-          # synthetic patch commit would incorrectly turn official v3.3.0's
-          # 32601 into 32602.
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
+          python3 "$GITHUB_WORKSPACE/kernelsu/patches/apply-v330-staged-daemon-hotfix.py"
+          grep -F 'stage_daemon_from("/data/local/tmp/.ksud-stage")' userspace/ksud/src/late_load.rs
           test -n "$(git status --porcelain)"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
 
@@ -109,6 +150,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
+          python3 "$GITHUB_WORKSPACE/kernelsu/patches/apply-v330-staged-daemon-hotfix.py"
+          grep -F 'stage_daemon_from("/data/local/tmp/.ksud-stage")' userspace/ksud/src/late_load.rs
           test -n "$(git status --porcelain)"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           mkdir -p userspace/ksud/bin/aarch64
@@ -142,6 +185,7 @@ jobs:
           stat -c '%n %s bytes' "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME"
           strings "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME" | grep -E '^3\.3\.0' | head -n 5 || true
           strings "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME" | grep -F '32601' | head -n 5
+          strings "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME" | grep -F 'Failed to stage the pre-uploaded ksud'
 
       - name: Upload exact ksud
         uses: actions/upload-artifact@v4
@@ -158,7 +202,7 @@ jobs:
       - name: Checkout repair branch
         uses: actions/checkout@v4
         with:
-          ref: repair/rebuild-kernelsu-v330-official-version
+          ref: ${{ env.PUBLISH_BRANCH }}
           fetch-depth: 0
           lfs: false
 
@@ -206,17 +250,6 @@ jobs:
           target['kernelsu']['sha256'] = ksud_sha
           manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 
-          validate_path = root / '.github/workflows/validate-feed.yml'
-          validate = validate_path.read_text(encoding='utf-8')
-          validate = re.sub(
-              r'assert target\["kernelsu"\]\["sha256"\] == \(\n\s+"[0-9a-f]{64}"\n\s+\)',
-              'assert target["kernelsu"]["sha256"] == (\n'
-              f'              "{ksud_sha}"\n'
-              '          )',
-              validate,
-          )
-          validate_path.write_text(validate, encoding='utf-8')
-
           readme_path = root / 'kernelsu/README.md'
           readme = readme_path.read_text(encoding='utf-8')
           readme = re.sub(
@@ -261,8 +294,7 @@ jobs:
 
           git config user.name "Root My Galaxy CI"
           git config user.email "root-my-galaxy-ci@users.noreply.github.com"
-          git add .github/workflows/validate-feed.yml kernelsu/README.md \
-                  "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME" support/targets-v3.json
+          git add kernelsu/README.md "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME" support/targets-v3.json
           git status --short
-          git commit -m 'Rebuild CZG3 KernelSU v3.3.0 with official 32601 version code'
-          git push origin HEAD:repair/rebuild-kernelsu-v330-official-version
+          git commit -m 'Rebuild CZG3 KernelSU v3.3.0 with staged-daemon late-load fix'
+          git push origin HEAD:"$PUBLISH_BRANCH"
