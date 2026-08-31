@@ -3,7 +3,7 @@ name: Rebuild CZG3 KernelSU v3.3.0 artifacts
 on:
   push:
     branches:
-      - repair/rebuild-kernelsu-v330-official-version
+      - repair/publish-kernelsu-v330-32601
     paths:
       - .github/workflows/rebuild-kernelsu-v330.yml
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: rebuild-czg3-kernelsu-v330-official-version
+  group: rebuild-czg3-kernelsu-v330-32601
   cancel-in-progress: false
 
 env:
@@ -21,6 +21,7 @@ env:
   TARGET_RELEASE: 6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k
   MODULE_NAME: android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
   KSUD_NAME: ksud-s25u-kdp-v3.3.0
+  PUBLISH_BRANCH: repair/publish-kernelsu-v330-32601
 
 jobs:
   module:
@@ -44,10 +45,8 @@ jobs:
           git checkout --detach "$KSU_TAG_SHA"
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
 
-          # Important: apply the Samsung port as working-tree changes only.
-          # KernelSU derives KSU_VERSION from the git commit count, so creating a
-          # synthetic patch commit would incorrectly turn official v3.3.0's
-          # 32601 into 32602.
+          # Keep the Samsung forward-port uncommitted. KernelSU derives its
+          # version code from git commit count; the official v3.3.0 tag is 32601.
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
           test -n "$(git status --porcelain)"
@@ -158,7 +157,7 @@ jobs:
       - name: Checkout repair branch
         uses: actions/checkout@v4
         with:
-          ref: repair/rebuild-kernelsu-v330-official-version
+          ref: ${{ env.PUBLISH_BRANCH }}
           fetch-depth: 0
           lfs: false
 
@@ -206,17 +205,6 @@ jobs:
           target['kernelsu']['sha256'] = ksud_sha
           manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 
-          validate_path = root / '.github/workflows/validate-feed.yml'
-          validate = validate_path.read_text(encoding='utf-8')
-          validate = re.sub(
-              r'assert target\["kernelsu"\]\["sha256"\] == \(\n\s+"[0-9a-f]{64}"\n\s+\)',
-              'assert target["kernelsu"]["sha256"] == (\n'
-              f'              "{ksud_sha}"\n'
-              '          )',
-              validate,
-          )
-          validate_path.write_text(validate, encoding='utf-8')
-
           readme_path = root / 'kernelsu/README.md'
           readme = readme_path.read_text(encoding='utf-8')
           readme = re.sub(
@@ -261,8 +249,7 @@ jobs:
 
           git config user.name "Root My Galaxy CI"
           git config user.email "root-my-galaxy-ci@users.noreply.github.com"
-          git add .github/workflows/validate-feed.yml kernelsu/README.md \
-                  "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME" support/targets-v3.json
+          git add kernelsu/README.md "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME" support/targets-v3.json
           git status --short
           git commit -m 'Rebuild CZG3 KernelSU v3.3.0 with official 32601 version code'
-          git push origin HEAD:repair/rebuild-kernelsu-v330-official-version
+          git push origin HEAD:"$PUBLISH_BRANCH"
