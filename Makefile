@@ -76,7 +76,13 @@ COMMON_CFLAGS := \
 
 .DEFAULT_GOAL := all
 
-.PHONY: all clean info release stable
+.PHONY: all clean info release stable host-test
+
+host-test:
+	mkdir -p build
+	$(CC) -std=c11 -Wall -Wextra -Werror -Isrc \
+	  tests/test_czg3_diag.c src/czg3_diag.c -o build/test_czg3_diag
+	./build/test_czg3_diag
 
 all: $(PRELOAD) $(APP_PRELOAD) $(ROOT_HELPER)
 

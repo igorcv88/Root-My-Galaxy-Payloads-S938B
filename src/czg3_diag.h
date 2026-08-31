@@ -17,6 +17,22 @@ enum czg3_failure {
 };
 
 enum czg3_retry_safety { CZG3_SAFE_RETRY, CZG3_UNSAFE_OR_UNKNOWN };
+enum czg3_supervisor_decision {
+  CZG3_SUPERVISOR_COMPLETE,
+  CZG3_SUPERVISOR_RETRY,
+  CZG3_SUPERVISOR_REBOOT_REQUIRED
+};
+
+enum czg3_writer_phase {
+  CZG3_WRITER_NOT_ARMED,
+  CZG3_WRITER_ARMED,
+  CZG3_WRITER_RETURNED_CLEANUP_UNPROVEN,
+  CZG3_WRITER_ENTERED,
+  CZG3_WRITER_RETURNED_UNCERTAIN,
+  CZG3_WRITER_POSSIBLE_MUTATION,
+  CZG3_WRITER_CLEAN_PRE_ENTRY_MISS,
+  CZG3_WRITER_VERIFIED_SUCCESS
+};
 
 struct czg3_timing {
   int baseline_usec;
@@ -29,6 +45,11 @@ struct czg3_timing {
 const char *czg3_failure_name(enum czg3_failure failure);
 enum czg3_retry_safety czg3_retry_policy(enum czg3_failure failure,
                                           int cleanup_complete);
+const char *czg3_writer_phase_name(enum czg3_writer_phase phase);
+enum czg3_retry_safety czg3_writer_retry_policy(
+    enum czg3_writer_phase phase);
+enum czg3_supervisor_decision czg3_supervisor_decide(
+    int child_succeeded, enum czg3_writer_phase phase);
 void czg3_timing_init(struct czg3_timing *timing, int baseline,
                       int minimum, int maximum);
 int czg3_timing_clean_miss(struct czg3_timing *timing, int direction);

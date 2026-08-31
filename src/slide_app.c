@@ -1882,6 +1882,7 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
     __asm__ volatile("yield" ::: "memory");
   }
   pr_info("slide pi stage=writer-enter tid=%d\n", tid);
+  app_publish_writer_entered();
 
 #if defined(SLIDE_STACK_WRITER) && \
     defined(SLIDE_STACK_WRITER_MCAST) && \
@@ -2169,8 +2170,15 @@ static int slide_trigger_physical_state_report(int report_status) {
   int status = 0;
   SYSCHK(waitpid(child, &status, 0));
   int ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  app_publish_writer_returned(status);
   if (report_status) {
-    pr_info("p0 physical write status=%d ok=%d\n", status, ok);
+    pr_info("p0 physical write wait_raw=%d wait_kind=%s wait_value=%d ok=%d "
+            "mutation=%s\n",
+            status, WIFEXITED(status) ? "exit" :
+                (WIFSIGNALED(status) ? "signal" : "other"),
+            WIFEXITED(status) ? WEXITSTATUS(status) :
+                (WIFSIGNALED(status) ? WTERMSIG(status) : status),
+            ok, ok ? "possible" : "uncertain");
   }
   return ok;
 }
@@ -2269,19 +2277,24 @@ static int app_trigger_fops_slide_slot(size_t slot) {
   if (!select_slide_payload_index(slot)) {
     return 0;
   }
+  size_t route_index = delay_index;
+  const char *delay_source = "route-sequence";
   int delay = 0;
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
   int forced_delay = slide_s928_fops_delay_override(&delay);
+  if (forced_delay) delay_source = "fops-delay-env";
 #else
   int forced_delay = 0;
 #endif
 #ifdef APP_FOPS_ROUTE_COARSE_DELAY_USEC
   if (!forced_delay) {
     delay = APP_FOPS_ROUTE_COARSE_DELAY_USEC;
+    delay_source = "target-coarse-define";
   }
 #elif defined(APP_FOPS_PSELECT_DELAY_USEC)
   if (!forced_delay) {
     delay = APP_FOPS_PSELECT_DELAY_USEC;
+    delay_source = "target-fops-define";
   }
 #elif defined(APP_FOPS_ROUTE_USE_PSELECT_DELAY) && \
     APP_FOPS_ROUTE_USE_PSELECT_DELAY
@@ -2293,6 +2306,7 @@ static int app_trigger_fops_slide_slot(size_t slot) {
     if (!errno && end != forced && !*end && value >= 0 &&
         value <= 1000000) {
       delay = (int)value;
+      delay_source = "supervisor-pselect-env";
     }
   }
 #endif
@@ -2302,6 +2316,7 @@ static int app_trigger_fops_slide_slot(size_t slot) {
   if (!slide_override_route_coarse_delay(&delay)) {
     return 0;
   }
+  if (getenv("STACK_WRITER_DELAY_USEC")) delay_source = "stack-writer-env";
   delay_index++;
   slide_route_fine_delay_ticks = slide_select_route_fine_delay_ticks();
   if (slide_route_fine_delay_ticks == UINT64_MAX) {
@@ -2311,10 +2326,13 @@ static int app_trigger_fops_slide_slot(size_t slot) {
   snprintf(delay_arg, sizeof(delay_arg), "%d", delay);
   SYSCHK(setenv("SLIDE_ENTER_DELAY_USEC", delay_arg, 1));
   pr_info("app fops slide route slot=%zu parent=%016zx target=%016zx "
-          "lock=%016zx delay=%d fine_ticks=%llu\n",
-          slot, slide_oracle_parent, slide_oracle_target, fake_lock, delay,
+          "lock=%016zx supervisor_attempt=%s route_index=%zu "
+          "coarse_source=%s coarse_usec=%d fine_ticks=%llu\n",
+          slot, slide_oracle_parent, slide_oracle_target, fake_lock,
+          getenv("S23_SUPERVISOR_ATTEMPT") ?: "unset", route_index,
+          delay_source, delay,
           (unsigned long long)slide_route_fine_delay_ticks);
-  app_publish_writer_started();
+  app_publish_writer_armed();
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
   /* A successful child result advances directly to the CFI stage without
    * another stdio write in between. */
@@ -2355,15 +2373,19 @@ int app_trigger_fops_slide_route(void) {
     return 0;
   }
 #endif
+  size_t route_index = delay_index;
+  const char *delay_source = "route-sequence";
   int delay = 0;
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
   int forced_delay = slide_s928_fops_delay_override(&delay);
+  if (forced_delay) delay_source = "fops-delay-env";
 #else
   int forced_delay = 0;
 #endif
 #ifdef APP_FOPS_ROUTE_COARSE_DELAY_USEC
   if (!forced_delay) {
     delay = APP_FOPS_ROUTE_COARSE_DELAY_USEC;
+    delay_source = "target-coarse-define";
   }
 #elif defined(APP_FOPS_ROUTE_USE_PSELECT_DELAY) && \
     APP_FOPS_ROUTE_USE_PSELECT_DELAY
@@ -2375,6 +2397,7 @@ int app_trigger_fops_slide_route(void) {
     if (!errno && end != forced && !*end && value >= 0 &&
         value <= 1000000) {
       delay = (int)value;
+      delay_source = "supervisor-pselect-env";
     }
   }
 #endif
@@ -2384,6 +2407,7 @@ int app_trigger_fops_slide_route(void) {
   if (!slide_override_route_coarse_delay(&delay)) {
     return 0;
   }
+  if (getenv("STACK_WRITER_DELAY_USEC")) delay_source = "stack-writer-env";
   delay_index++;
   slide_route_fine_delay_ticks = slide_select_route_fine_delay_ticks();
   if (slide_route_fine_delay_ticks == UINT64_MAX) {
@@ -2393,11 +2417,14 @@ int app_trigger_fops_slide_route(void) {
   snprintf(delay_arg, sizeof(delay_arg), "%d", delay);
   SYSCHK(setenv("SLIDE_ENTER_DELAY_USEC", delay_arg, 1));
   pr_info("app fops slide route parent=%016zx target=%016zx lock=%016zx "
-          "configured_delay=%d consume_delay=%u fine_ticks=%llu\n",
-          slide_oracle_parent, slide_oracle_target, fake_lock, delay,
+          "supervisor_attempt=%s route_index=%zu coarse_source=%s "
+          "coarse_usec=%d effective_consume_usec=%u fine_ticks=%llu\n",
+          slide_oracle_parent, slide_oracle_target, fake_lock,
+          getenv("S23_SUPERVISOR_ATTEMPT") ?: "unset", route_index,
+          delay_source, delay,
           (unsigned int)slide_enter_delay_usec(),
           (unsigned long long)slide_route_fine_delay_ticks);
-  app_publish_writer_started();
+  app_publish_writer_armed();
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
   /* Preserve the immediate successful-trigger to CFI handoff. */
   return slide_trigger_physical_state_report(0);

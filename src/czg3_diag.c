@@ -40,6 +40,34 @@ enum czg3_retry_safety czg3_retry_policy(enum czg3_failure failure,
              : CZG3_UNSAFE_OR_UNKNOWN;
 }
 
+const char *czg3_writer_phase_name(enum czg3_writer_phase phase) {
+  static const char *const names[] = {
+      "NOT_ARMED", "ARMED_OUTCOME_UNKNOWN", "RETURNED_CLEANUP_UNPROVEN",
+      "WRITER_ENTERED",
+      "WRITER_RETURNED_MUTATION_UNCERTAIN", "POSSIBLE_MUTATION",
+      "CLEAN_PRE_ENTRY_MISS", "VERIFIED_SUCCESS"};
+  return (unsigned)phase < sizeof(names) / sizeof(names[0])
+             ? names[phase]
+             : "INVALID";
+}
+
+enum czg3_retry_safety czg3_writer_retry_policy(
+    enum czg3_writer_phase phase) {
+  return phase == CZG3_WRITER_NOT_ARMED ||
+                 phase == CZG3_WRITER_CLEAN_PRE_ENTRY_MISS
+             ? CZG3_SAFE_RETRY
+             : CZG3_UNSAFE_OR_UNKNOWN;
+}
+
+enum czg3_supervisor_decision czg3_supervisor_decide(
+    int child_succeeded, enum czg3_writer_phase phase) {
+  if (child_succeeded || phase == CZG3_WRITER_VERIFIED_SUCCESS)
+    return CZG3_SUPERVISOR_COMPLETE;
+  return czg3_writer_retry_policy(phase) == CZG3_SAFE_RETRY
+             ? CZG3_SUPERVISOR_RETRY
+             : CZG3_SUPERVISOR_REBOOT_REQUIRED;
+}
+
 void czg3_timing_init(struct czg3_timing *t, int baseline, int minimum,
                       int maximum) {
   t->minimum_usec = minimum;

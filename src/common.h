@@ -38,6 +38,7 @@
 #include <unistd.h>
 
 #include "kernelsnitch/utils.h"
+#include "czg3_diag.h"
 
 #define KERNEL_PAGE_SETUP_ATTEMPTS 6
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
@@ -394,7 +395,11 @@ int slide_sigreturn_preflight(void);
 void app_publish_p0_offset(uintptr_t offset);
 void app_publish_slide_ready(void);
 void app_publish_p0_dirty(void);
-void app_publish_writer_started(void);
+void app_publish_writer_armed(void);
+void app_publish_writer_entered(void);
+void app_publish_writer_returned(int child_status);
+void app_publish_writer_possible_mutation(void);
+void app_publish_writer_verified_success(void);
 int select_slide_payload_slot(uintptr_t offset);
 int select_slide_payload_index(size_t index);
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
