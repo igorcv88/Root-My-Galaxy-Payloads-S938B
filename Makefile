@@ -54,6 +54,7 @@ APP_PRELOAD_SRCS := \
   src/util.c \
   src/czg3_diag.c \
   src/app_payload_state.c \
+  src/keeper_guard.c \
   src/slide_app.c \
   src/fops.c \
   src/pipe.c \
