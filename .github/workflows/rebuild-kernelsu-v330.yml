@@ -1,18 +1,22 @@
 name: Rebuild CZG3 KernelSU v3.3.0 artifacts
 
 on:
+  push:
+    branches:
+      - repair/rebuild-kernelsu-v330-official-version
+    paths:
+      - .github/workflows/rebuild-kernelsu-v330.yml
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: rebuild-czg3-kernelsu-v330
+  group: rebuild-czg3-kernelsu-v330-official-version
   cancel-in-progress: false
 
 env:
   KSU_REPO: https://github.com/tiann/KernelSU.git
-  KSU_TAG: v3.3.0
   KSU_TAG_SHA: 932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e
   TARGET_RELEASE: 6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k
   MODULE_NAME: android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
@@ -30,7 +34,7 @@ jobs:
         with:
           lfs: false
 
-      - name: Build exact CZG3 KernelSU module
+      - name: Build official-version CZG3 KernelSU module
         shell: bash
         run: |
           set -euxo pipefail
@@ -39,16 +43,15 @@ jobs:
           cd /tmp/KernelSU
           git checkout --detach "$KSU_TAG_SHA"
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
-          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
 
-          # Apply the Samsung forward-port as one deterministic local commit so
-          # KernelSU's git-based version calculation reports 32602.
-          git config user.name "Root My Galaxy CI"
-          git config user.email "root-my-galaxy-ci@users.noreply.github.com"
-          git add -A
-          GIT_AUTHOR_DATE='2026-08-31T00:00:00Z' \
-          GIT_COMMITTER_DATE='2026-08-31T00:00:00Z' \
-            git commit -m 'Apply S938B CZG3 Samsung KDP/RKP/DEFEX forward-port'
+          # Important: apply the Samsung port as working-tree changes only.
+          # KernelSU derives KSU_VERSION from the git commit count, so creating a
+          # synthetic patch commit would incorrectly turn official v3.3.0's
+          # 32601 into 32602.
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
+          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
+          test -n "$(git status --porcelain)"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
 
           test -n "${KDIR:-}"
           test -d "$KDIR"
@@ -63,7 +66,8 @@ jobs:
           CONFIG_KSU_SAMSUNG_RKP=y \
           CONFIG_KSU_SAMSUNG_DEFEX=y \
           CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y \
-          CC=clang make
+          CC=clang make 2>&1 | tee "$GITHUB_WORKSPACE/out-module-build.log"
+          grep -F 'KernelSU version: 32601' "$GITHUB_WORKSPACE/out-module-build.log"
 
           mkdir -p "$GITHUB_WORKSPACE/out/module"
           cp kernelsu.ko "$GITHUB_WORKSPACE/out/module/$MODULE_NAME"
@@ -76,7 +80,7 @@ jobs:
       - name: Upload exact module
         uses: actions/upload-artifact@v4
         with:
-          name: czg3-kernelsu-module
+          name: czg3-kernelsu-module-32601
           path: out/module/${{ env.MODULE_NAME }}
           if-no-files-found: error
           retention-days: 7
@@ -93,23 +97,20 @@ jobs:
       - name: Download exact module
         uses: actions/download-artifact@v4
         with:
-          name: czg3-kernelsu-module
+          name: czg3-kernelsu-module-32601
           path: out/module
 
-      - name: Checkout and patch KernelSU
+      - name: Checkout and patch KernelSU without changing git version count
         run: |
           set -euxo pipefail
           git clone "$KSU_REPO" /tmp/KernelSU
           cd /tmp/KernelSU
           git checkout --detach "$KSU_TAG_SHA"
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
-          git config user.name "Root My Galaxy CI"
-          git config user.email "root-my-galaxy-ci@users.noreply.github.com"
-          git add -A
-          GIT_AUTHOR_DATE='2026-08-31T00:00:00Z' \
-          GIT_COMMITTER_DATE='2026-08-31T00:00:00Z' \
-            git commit -m 'Apply S938B CZG3 Samsung KDP/RKP/DEFEX forward-port'
+          test -n "$(git status --porcelain)"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           mkdir -p userspace/ksud/bin/aarch64
           cp "$GITHUB_WORKSPACE/out/module/$MODULE_NAME" \
              userspace/ksud/bin/aarch64/android15-6.6_kernelsu.ko
@@ -125,7 +126,7 @@ jobs:
         with:
           ndk-version: r29
 
-      - name: Build patched ksud with embedded exact module
+      - name: Build patched ksud with embedded 32601 module
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
@@ -139,11 +140,129 @@ jobs:
           file "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME"
           sha256sum "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME"
           stat -c '%n %s bytes' "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME"
+          strings "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME" | grep -E '^3\.3\.0' | head -n 5 || true
+          strings "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME" | grep -F '32601' | head -n 5
 
       - name: Upload exact ksud
         uses: actions/upload-artifact@v4
         with:
-          name: czg3-ksud
+          name: czg3-ksud-32601
           path: out/ksud/${{ env.KSUD_NAME }}
           if-no-files-found: error
           retention-days: 7
+
+  publish-branch:
+    runs-on: ubuntu-latest
+    needs: [module, ksud]
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: repair/rebuild-kernelsu-v330-official-version
+          fetch-depth: 0
+          lfs: false
+
+      - name: Download module
+        uses: actions/download-artifact@v4
+        with:
+          name: czg3-kernelsu-module-32601
+          path: out/module
+
+      - name: Download ksud
+        uses: actions/download-artifact@v4
+        with:
+          name: czg3-ksud-32601
+          path: out/ksud
+
+      - name: Publish corrected 32601 Git blobs and synchronize metadata
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cp "out/module/$MODULE_NAME" "kernelsu/$MODULE_NAME"
+          cp "out/ksud/$KSUD_NAME" "kernelsu/$KSUD_NAME"
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+
+          root = pathlib.Path('.')
+          module = root / 'kernelsu/android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko'
+          ksud = root / 'kernelsu/ksud-s25u-kdp-v3.3.0'
+          module_size = module.stat().st_size
+          module_sha = hashlib.sha256(module.read_bytes()).hexdigest()
+          ksud_size = ksud.stat().st_size
+          ksud_sha = hashlib.sha256(ksud.read_bytes()).hexdigest()
+
+          manifest_path = root / 'support/targets-v3.json'
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          target = manifest['payloads'][0]
+          target['kernelsu']['url'] = (
+              'https://raw.githubusercontent.com/igorcv88/'
+              'Root-My-Galaxy-Payloads-S938B/main/kernelsu/ksud-s25u-kdp-v3.3.0'
+          )
+          target['kernelsu']['size'] = ksud_size
+          target['kernelsu']['sha256'] = ksud_sha
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+
+          validate_path = root / '.github/workflows/validate-feed.yml'
+          validate = validate_path.read_text(encoding='utf-8')
+          validate = re.sub(
+              r'assert target\["kernelsu"\]\["sha256"\] == \(\n\s+"[0-9a-f]{64}"\n\s+\)',
+              'assert target["kernelsu"]["sha256"] == (\n'
+              f'              "{ksud_sha}"\n'
+              '          )',
+              validate,
+          )
+          validate_path.write_text(validate, encoding='utf-8')
+
+          readme_path = root / 'kernelsu/README.md'
+          readme = readme_path.read_text(encoding='utf-8')
+          readme = re.sub(
+              r'patched source checkout produced `KSU_VERSION=\d+`',
+              'patched working tree produced `KSU_VERSION=32601`',
+              readme,
+              count=1,
+          )
+          readme = re.sub(
+              r'the userspace build reports\n`[^`]+` and version code `\d+`',
+              'the userspace build is produced from the official v3.3.0 commit count and embeds version code `32601`',
+              readme,
+              count=1,
+          )
+          block_pattern = re.compile(
+              r'(android15-6\.6_kernelsu-s25u-kdp-v3\.3\.0\.ko\n)'
+              r'size: \d+\nSHA-256: [0-9a-f]{64}\n\n'
+              r'(ksud-s25u-kdp-v3\.3\.0\n)'
+              r'size: \d+\nSHA-256: [0-9a-f]{64}',
+          )
+          replacement = (
+              f'android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko\n'
+              f'size: {module_size}\nSHA-256: {module_sha}\n\n'
+              f'ksud-s25u-kdp-v3.3.0\n'
+              f'size: {ksud_size}\nSHA-256: {ksud_sha}'
+          )
+          readme, count = block_pattern.subn(replacement, readme, count=1)
+          if count != 1:
+              raise SystemExit('failed to update CZG3 artifact metadata block in README')
+          readme_path.write_text(readme, encoding='utf-8')
+
+          print(f'MODULE_SIZE={module_size}')
+          print(f'MODULE_SHA256={module_sha}')
+          print(f'KSUD_SIZE={ksud_size}')
+          print(f'KSUD_SHA256={ksud_sha}')
+          PY
+
+          test "$(head -c 7 "kernelsu/$KSUD_NAME")" != 'version'
+          test "$(head -c 7 "kernelsu/$MODULE_NAME")" != 'version'
+          sha256sum "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME"
+          git diff --check
+
+          git config user.name "Root My Galaxy CI"
+          git config user.email "root-my-galaxy-ci@users.noreply.github.com"
+          git add .github/workflows/validate-feed.yml kernelsu/README.md \
+                  "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME" support/targets-v3.json
+          git status --short
+          git commit -m 'Rebuild CZG3 KernelSU v3.3.0 with official 32601 version code'
+          git push origin HEAD:repair/rebuild-kernelsu-v330-official-version
