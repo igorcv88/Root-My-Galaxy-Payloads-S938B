@@ -1,15 +1,15 @@
 # Samsung KernelSU late-load builds
 
-The files in this directory are built from KernelSU `v3.2.5`, commit
-`b0bc817b4e966aa6aa830834eaf6ef765d821d40`. They are not interchangeable
+The files in this directory are built from KernelSU `v3.3.0`, official tag commit
+`932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e`. They are not interchangeable
 between KMIs.
 
 ## Versioned artifacts
 
 | File | Target | KMI | Purpose |
 | --- | --- | --- | --- |
-| `android15-6.6_kernelsu-s25u-kdp.ko` | `SM-S938N`, `S938NKSUACZF1` | `android15-6.6` | Standalone reference module from the previously deployed S25U build |
-| `ksud-s25u-kdp` | `SM-S938N`, `S938NKSUACZF1` | `android15-6.6` | Late-load binary embedding the 6.6 module |
+| `android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko` | `SM-S938B`, `S938BXXSBCZG3` | `android15-6.6` | Exact-release v3.3.0 Samsung KDP/RKP/DEFEX no-patch-text module |
+| `ksud-s25u-kdp-v3.3.0` | `SM-S938B`, `S938BXXSBCZG3` | `android15-6.6` | v3.3.0 late-load binary embedding the exact CZG3 module |
 | `android15-6.6_kernelsu-A566EXXSCCZG6-kdp.ko` | `SM-A566E`, `A566EXXSCCZG6` | `android15-6.6` | Exact A56 module with target `vermagic`, audited for manual relocation; live text patching disabled for Exynos EL2 |
 | `ksud-A566EXXSCCZG6-kdp` | Same exact A56 build | `android15-6.6` | Device-tested late-load binary embedding the A56 6.6 no-patch-text module |
 | `android15-6.6_kernelsu-A366WVLS3AYG1-kdp.ko` | `SM-A366W`, `A366WVLS3AYG1` | `android15-6.6` | Exact A36 module with target `vermagic`, audited for manual relocation; live text patching disabled for Samsung KDP/RKP |
@@ -72,6 +72,67 @@ KernelSU Manager reporting `Working <LKM> [Jailbreak mode]` and version
 Galaxy app flow; KernelSU Manager reported `Working <LKM> [Jailbreak mode]`
 and version `32525-2`. The older A15 5.10 pair remains device-untested.
 
+## S938B CZG3 KernelSU v3.3.0 forward-port
+
+The CZG3 payload was forward-ported from the clean official `v3.3.0` tag at
+`932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e`. The version calculation from the
+patched source checkout produced `KSU_VERSION=32602`; the userspace build reports
+`3.3.0-1-g25008801` and version code `32602`. Manager and driver version codes are
+not assumed to be identical. The complete source delta is
+[`patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch`](patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch); the v3.2.5 patch remains unchanged as history.
+
+Build the module from a clean tag checkout with DDK
+`ghcr.io/ylarod/ddk-min:android15-6.6-20260828`, first replacing
+`$KDIR/include/config/kernel.release` and
+`$KDIR/include/generated/utsrelease.h` with:
+
+```text
+6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k
+```
+
+Then run:
+
+```sh
+git checkout v3.3.0
+git apply KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch
+make -C kernel clean || true
+CONFIG_KSU=m \
+CONFIG_KSU_SAMSUNG_KDP=y \
+CONFIG_KSU_SAMSUNG_RKP=y \
+CONFIG_KSU_SAMSUNG_DEFEX=y \
+CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y \
+CC=clang make -C kernel -j"$(nproc)"
+llvm-strip -d kernel/kernelsu.ko
+```
+
+After copying that module to
+`userspace/ksud/bin/aarch64/android15-6.6_kernelsu.ko`, force a non-stale NDK r29
+build with `cargo clean -p ksud` followed by
+`cargo build --release --target aarch64-linux-android -p ksud`. The late-load path copies the already-downloaded running executable from
+`/proc/self/exe` before the module changes its security context; it does not
+depend on an uncreated `.ksud-stage` file. The `ksud late-load` contract is
+preserved.
+
+Published CZG3 artifacts (stored as Git LFS objects so branch updates and reviews contain textual pointers rather than unsupported inline binary patches):
+
+```text
+android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
+size: 332416
+SHA-256: fa80d308aa26b895603d25ad40f0568b88c1e90332c5dfffdb50d3dc86aa2e49
+
+ksud-s25u-kdp-v3.3.0
+size: 4823128
+SHA-256: 85b550f7527be35ff8a44689cefea96e5faafd636a74ef66dda00a367deeff74
+```
+
+Static validation confirmed AArch64 ELF64, exact vermagic, 215 undefined symbols
+present in the DDK reference `vmlinux`, an intentionally empty `__versions`
+section for kallsyms-aware manual relocation, zero target CRC mismatches, and no
+unsafe text-patching imports. `check_symbol` and the repository target-audit tool
+passed against the android15-6.6 DDK `vmlinux`/`Module.symvers`. The exact CZG3
+recovered `vmlinux` was not retained in this repository, so a second audit against
+that ELF could not be repeated here. Hardware validation was not performed.
+
 ## Why the stock module crashes on Samsung
 
 The original S25U failure was captured in
@@ -108,9 +169,8 @@ contains the complete source delta from the tagged v3.2.5 tree:
   syscall kprobes without modifying the syscall table;
 - mark nested sucompat calls so a handler invoking the original syscall cannot
   recursively enter the same kprobe;
-- stage `ksud` at `/data/local/tmp/.ksud-stage`, rename it onto the same
-  `/data` filesystem before loading the module, then finish labels/assets after
-  the module is active.
+- copy the already-downloaded running `ksud` from `/proc/self/exe` before
+  loading the module, then finish labels/assets after the module is active.
 
 ## 6.1 generalization
 
