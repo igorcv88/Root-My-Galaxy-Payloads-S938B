@@ -108,6 +108,19 @@ def main() -> None:
         "v2 legacy and v3 payloads unexpectedly became identical"
     )
 
+    diagnostic = json.loads(
+        (ROOT / "support/targets-v3-diagnostic.json").read_text(encoding="utf-8")
+    )
+    assert diagnostic.get("schemaVersion") == 3
+    diagnostic_payloads = diagnostic.get("payloads", [])
+    assert len(diagnostic_payloads) == 1
+    diagnostic_target = diagnostic_payloads[0]
+    assert diagnostic_target["payloadId"] == "pa3q-S938BXXSBCZG3-diagnostic"
+    assert diagnostic_target["exactMatch"] == EXPECTED_IDENTITY
+    diagnostic_exploit = validate_artifact(diagnostic_target["exploit"])
+    validate_artifact(diagnostic_target["kernelsu"])
+    assert diagnostic_exploit.read_bytes() != exploit.read_bytes()
+
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/target.h").is_file()
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h").is_file()
     print(f"Payload feed is valid ({len(payloads)} profile(s); CZG3 exact checks passed)")
