@@ -1,7 +1,7 @@
 diff --git a/userspace/ksud/src/late_load.rs b/userspace/ksud/src/late_load.rs
 --- a/userspace/ksud/src/late_load.rs
 +++ b/userspace/ksud/src/late_load.rs
-@@ -42,9 +42,10 @@ pub fn run(package_name: &String, kmi: Option<String>, allow_shell: bool) -> Res
+@@ -42,9 +42,11 @@ pub fn run(package_name: &String, kmi: Option<String>, allow_shell: bool) -> Res
      info!("late-load command triggered!");
      dump_process_info("late-load start");
  
