@@ -6,7 +6,9 @@ on:
       - repair/publish-kernelsu-v330-32601
     paths:
       - .github/workflows/rebuild-kernelsu-v330.yml
+      - kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch
       - kernelsu/patches/KernelSU-v3.3.0-s938b-staged-daemon-hotfix.patch
+      - kernelsu/patches/apply-v330-staged-daemon-hotfix.py
   workflow_dispatch:
 
 permissions:
@@ -25,8 +27,48 @@ env:
   PUBLISH_BRANCH: repair/publish-kernelsu-v330-32601
 
 jobs:
+  patch-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout payload repository
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Checkout exact KernelSU v3.3.0 source
+        run: |
+          set -euxo pipefail
+          git clone "$KSU_REPO" /tmp/KernelSU
+          cd /tmp/KernelSU
+          git checkout --detach "$KSU_TAG_SHA"
+          test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
+
+      - name: Apply Samsung CZG3 forward-port
+        run: |
+          set -euxo pipefail
+          cd /tmp/KernelSU
+          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
+
+      - name: Apply staged-daemon late-load hotfix
+        run: |
+          set -euxo pipefail
+          cd /tmp/KernelSU
+          python3 "$GITHUB_WORKSPACE/kernelsu/patches/apply-v330-staged-daemon-hotfix.py"
+
+      - name: Verify staged-daemon handoff
+        run: |
+          set -euxo pipefail
+          cd /tmp/KernelSU
+          grep -F 'stage_daemon_from("/data/local/tmp/.ksud-stage")' userspace/ksud/src/late_load.rs
+          grep -F 'Failed to stage the pre-uploaded ksud' userspace/ksud/src/late_load.rs
+          grep -F 'pub fn stage_daemon_from' userspace/ksud/src/utils.rs
+          test -n "$(git status --porcelain)"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
+
   module:
     runs-on: ubuntu-latest
+    needs: patch-preflight
     container:
       image: ghcr.io/ylarod/ddk-min:android15-6.6-20260828
       options: --privileged
@@ -45,12 +87,9 @@ jobs:
           cd /tmp/KernelSU
           git checkout --detach "$KSU_TAG_SHA"
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
-
-          # Keep the Samsung forward-port uncommitted. KernelSU derives its
-          # version code from git commit count; the official v3.3.0 tag is 32601.
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
-          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-s938b-staged-daemon-hotfix.patch"
+          python3 "$GITHUB_WORKSPACE/kernelsu/patches/apply-v330-staged-daemon-hotfix.py"
           grep -F 'stage_daemon_from("/data/local/tmp/.ksud-stage")' userspace/ksud/src/late_load.rs
           test -n "$(git status --porcelain)"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
@@ -111,7 +150,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
-          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-s938b-staged-daemon-hotfix.patch"
+          python3 "$GITHUB_WORKSPACE/kernelsu/patches/apply-v330-staged-daemon-hotfix.py"
           grep -F 'stage_daemon_from("/data/local/tmp/.ksud-stage")' userspace/ksud/src/late_load.rs
           test -n "$(git status --porcelain)"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
