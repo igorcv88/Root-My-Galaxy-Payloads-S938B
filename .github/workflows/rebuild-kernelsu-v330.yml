@@ -46,8 +46,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
 
-          # Keep the Samsung forward-port as one local source commit so KernelSU's
-          # git-based version calculation matches the intended 3.3.0+1 build.
+          # Keep the Samsung forward-port as one deterministic local source commit
+          # so KernelSU's git-based version calculation reports 32602.
           git config user.name "Root My Galaxy CI"
           git config user.email "root-my-galaxy-ci@users.noreply.github.com"
           git add -A
@@ -208,18 +208,6 @@ jobs:
           target['kernelsu']['sha256'] = sha
           manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 
-          workflow_path = root / '.github/workflows/validate-feed.yml'
-          workflow = workflow_path.read_text(encoding='utf-8')
-          workflow = workflow.replace('          lfs: true\n', '')
-          workflow = re.sub(
-              r'assert target\["kernelsu"\]\["sha256"\] == \(\n\s+"[0-9a-f]{64}"\n\s+\)',
-              'assert target["kernelsu"]["sha256"] == (\n'
-              f'              "{sha}"\n'
-              '          )',
-              workflow,
-          )
-          workflow_path.write_text(workflow, encoding='utf-8')
-
           readme_path = root / 'kernelsu/README.md'
           readme = readme_path.read_text(encoding='utf-8')
           block_pattern = re.compile(
@@ -249,7 +237,6 @@ jobs:
           print(f'KSUD_SHA256={sha}')
           PY
 
-          # Guard against accidentally committing LFS pointers again.
           test "$(head -c 7 "kernelsu/$KSUD_NAME")" != 'version'
           test "$(head -c 7 "kernelsu/$MODULE_NAME")" != 'version'
           sha256sum "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME"
@@ -257,7 +244,7 @@ jobs:
 
           git config user.name "Root My Galaxy CI"
           git config user.email "root-my-galaxy-ci@users.noreply.github.com"
-          git add .gitattributes .github/workflows/validate-feed.yml kernelsu/README.md \
+          git add .gitattributes kernelsu/README.md \
                   "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME" support/targets-v3.json
           git status --short
           git commit -m 'Rebuild and publish CZG3 KernelSU v3.3.0 artifacts as Git blobs'
