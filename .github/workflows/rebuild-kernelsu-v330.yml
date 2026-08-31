@@ -6,6 +6,7 @@ on:
       - repair/publish-kernelsu-v330-32601
     paths:
       - .github/workflows/rebuild-kernelsu-v330.yml
+      - kernelsu/patches/KernelSU-v3.3.0-s938b-staged-daemon-hotfix.patch
   workflow_dispatch:
 
 permissions:
@@ -49,6 +50,8 @@ jobs:
           # version code from git commit count; the official v3.3.0 tag is 32601.
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
+          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-s938b-staged-daemon-hotfix.patch"
+          grep -F 'stage_daemon_from("/data/local/tmp/.ksud-stage")' userspace/ksud/src/late_load.rs
           test -n "$(git status --porcelain)"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
 
@@ -108,6 +111,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
+          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-s938b-staged-daemon-hotfix.patch"
+          grep -F 'stage_daemon_from("/data/local/tmp/.ksud-stage")' userspace/ksud/src/late_load.rs
           test -n "$(git status --porcelain)"
           test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           mkdir -p userspace/ksud/bin/aarch64
@@ -141,6 +146,7 @@ jobs:
           stat -c '%n %s bytes' "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME"
           strings "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME" | grep -E '^3\.3\.0' | head -n 5 || true
           strings "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME" | grep -F '32601' | head -n 5
+          strings "$GITHUB_WORKSPACE/out/ksud/$KSUD_NAME" | grep -F 'Failed to stage the pre-uploaded ksud'
 
       - name: Upload exact ksud
         uses: actions/upload-artifact@v4
@@ -251,5 +257,5 @@ jobs:
           git config user.email "root-my-galaxy-ci@users.noreply.github.com"
           git add kernelsu/README.md "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME" support/targets-v3.json
           git status --short
-          git commit -m 'Rebuild CZG3 KernelSU v3.3.0 with official 32601 version code'
+          git commit -m 'Rebuild CZG3 KernelSU v3.3.0 with staged-daemon late-load fix'
           git push origin HEAD:"$PUBLISH_BRANCH"
