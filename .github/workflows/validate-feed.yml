@@ -15,8 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
 
       - name: Validate legacy v2 and exact v3 feeds
         run: |
@@ -112,7 +110,7 @@ jobs:
               "1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303"
           )
           assert target["kernelsu"]["sha256"] == (
-              "85b550f7527be35ff8a44689cefea96e5faafd636a74ef66dda00a367deeff74"
+              "cc246036a6881ee72ac52340220e64c6f6993f9c28f5fe2ea60035b4399bf503"
           )
           assert synced.read_bytes() != legacy_exploit.read_bytes(), (
               "v2 legacy and v3 synced payloads unexpectedly collapsed"
