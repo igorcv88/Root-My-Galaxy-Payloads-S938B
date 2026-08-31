@@ -5,9 +5,10 @@
 <p align="center">
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest"><img alt="App release" src="https://img.shields.io/github/v/release/igorcv88/Root-My-Galaxy-S938B?label=app" /></a>
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/igorcv88/Root-My-Galaxy-S938B/total" /></a>
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/igorcv88/Root-My-Galaxy-Payloads-S938B" /></a>
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/igorcv88/Root-My-Galaxy-Payloads-S938B?label=stars&amp;labelColor=555&amp;color=2f81f7" /></a>
   <img alt="Firmware" src="https://img.shields.io/badge/firmware-S938BXXSBCZG3-59636e" />
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B/actions/workflows/update-payloads.yml"><img alt="Payload build" src="https://img.shields.io/github/actions/workflow/status/igorcv88/Root-My-Galaxy-Payloads-S938B/update-payloads.yml?branch=main&label=payloads" /></a>
+  <img alt="KernelSU" src="https://img.shields.io/badge/KernelSU-3.3.0-2f81f7" />
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B/actions/workflows/update-payloads.yml"><img alt="Payload build" src="https://img.shields.io/github/actions/workflow/status/igorcv88/Root-My-Galaxy-Payloads-S938B/update-payloads.yml?branch=main&amp;label=payloads" /></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/igorcv88/Root-My-Galaxy-Payloads-S938B" /></a>
 </p>
 
@@ -23,23 +24,20 @@
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest">Latest APK</a>
 </p>
 
-This repository contains the firmware profile and executable payloads maintained for the Root My Galaxy fork. Normal users should install the APK from [Root My Galaxy](https://github.com/igorcv88/Root-My-Galaxy-S938B); they do not need to download or execute files from this repository manually.
+This repository contains the firmware profile and executable payloads maintained for the Root My Galaxy fork. If you only want to root the phone, install the APK from [Root My Galaxy](https://github.com/igorcv88/Root-My-Galaxy-S938B); these files do not need to be downloaded manually.
 
 ## Why this fork?
 
-This repository is derived from [BuSung-dev/Root-My-Galaxy-Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads), but the current branch adds a separately maintained CZG3 path rather than simply mirroring upstream binaries.
+Compared with [upstream Root My Galaxy Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads), this fork currently adds:
 
-The main differences are:
+- **Exact `SM-S938B / S938BXXSBCZG3` support** for the maintained Galaxy S25 Ultra firmware.
+- **KernelSU 3.3.0**, while upstream payloads are currently based on KernelSU 3.2.5.
+- **SHA-256 verification** for the maintained CZG3 exploit and KernelSU payloads.
+- **Active CZG3 reliability work**, including payload instrumentation used by Root My Galaxy's exploit diagnostics and latency analysis.
 
-- **Exact `SM-S938B / S938BXXSBCZG3` profile** — the maintained v3 entry includes the complete device, build, kernel, ABI and page-size identity used by the app's fail-closed automatic selection.
-- **Per-artifact SHA-256 metadata** — the CZG3 exploit and KernelSU userspace payload are checked by both size and SHA-256 before the app treats them as valid.
-- **CZG3-specific KernelSU 3.3.0 build** — the repository maintains the Samsung KDP/RKP/DEFEX late-load module and `ksud` pair used by this fork, including the staged-daemon handoff fix required by the current CZG3 path.
-- **Controlled payload rebuild workflow** — exploit and/or KernelSU can be rebuilt from one manual `Atualizar Payloads` workflow, which recalculates metadata, validates the result, commits only real changes, and can then trigger a signed Root My Galaxy APK release.
-- **Auto Root snapshot compatibility** — the companion app no longer depends on the latest repository payload at boot. A manually verified payload set becomes a local known-good snapshot, so publishing a newer payload does not invalidate an already working Auto Root installation.
+Upstream maintains a broader multi-device catalog. This fork currently focuses its automatic feed on the exact CZG3 profile above.
 
-The upstream repository contains a broader multi-device payload catalog. This fork still carries upstream history and source, but its **current controlled v3 feed is intentionally focused on the exact CZG3 profile** while broader catalog delivery is separated from the working S25 Ultra safety path.
-
-## Current controlled profile
+## Current profile
 
 | | Configuration |
 | --- | --- |
@@ -50,59 +48,33 @@ The upstream repository contains a broader multi-device payload catalog. This fo
 | ABI | `arm64-v8a` |
 | Page size | 4K |
 
-A firmware or kernel update can invalidate the current exploit profile. Root My Galaxy compares the device against the maintained identity before automatic selection.
+A firmware or kernel update can invalidate the exploit profile.
 
 ## What this repository provides
 
-Root My Galaxy consumes three pieces from this repository:
+Root My Galaxy uses three pieces from this repository:
 
-- **Support profile** — describes which device, firmware and kernel an exact payload belongs to.
-- **Exploit payload** — performs the supported kernel exploit and acquires temporary bootstrap root.
-- **KernelSU payload** — provides the late-load KernelSU userspace/module chain after bootstrap root is available.
+- **Support profile** — identifies the compatible device, firmware and kernel.
+- **Exploit payload** — acquires temporary bootstrap root.
+- **KernelSU payload** — late-loads the matching KernelSU build after bootstrap root is available.
 
-The active feed is stored in `support/targets-v3.json`. The maintained CZG3 executable entries include expected file size and SHA-256 checksum.
+The current app feed is stored in `support/targets-v3.json`. CZG3 executable entries include expected size and SHA-256 metadata.
 
-## How Root My Galaxy uses these payloads
+## How Root My Galaxy uses the payloads
 
-During a normal manual installation, Root My Galaxy resolves the current payload repository commit, loads the support profile, downloads the files from that immutable commit and verifies their declared metadata before execution.
+During a manual installation, Root My Galaxy downloads the matching payloads and verifies them before execution.
 
-New downloads are placed in a **pending** area. They do not immediately replace the payloads available to Auto Root.
-
-After the manual exploit and KernelSU late-load complete successfully, the app's existing success receipt identifies that pending set as proven on the device. On the next full boot, Root My Galaxy promotes that exact set into a durable, versioned local Auto Root snapshot and verifies it again before execution.
-
-Consequently:
-
-```text
-repository publishes payload B
-        ↓
-user already has verified payload A locally
-        ↓
-phone reboots before user opens the app
-        ↓
-Auto Root still uses verified payload A
-```
-
-A newer payload becomes authoritative for Auto Root only after a successful manual installation proves it. Failed update attempts cannot overwrite the previous known-good snapshot.
-
-The APK still embeds a single exact CZG3 profile as a compatibility fallback for users migrating from app versions that predate durable snapshots. It is no longer the long-term source of truth once a local snapshot exists.
+After a successful root, Auto Root keeps the verified working set locally. Publishing a newer payload does not break that existing Auto Root setup; a new set only replaces it after it has also completed a successful manual root on the device.
 
 ## Root lifetime
 
-The payload late-loads KernelSU for the current kernel boot. It does not flash a boot image or make the Samsung kernel modification permanent. A full reboot returns the device to the normal stock boot state; Root My Galaxy can then restore KernelSU through its optional Auto Root feature.
+KernelSU is late-loaded for the current kernel boot. No boot image is flashed or modified. A full reboot returns the phone to its stock boot state, and Root My Galaxy can restore root through Auto Root.
 
-## Integrity and compatibility
+## Integrity
 
-The CZG3 profile uses exact device identity plus checksums for the exploit and KernelSU payload. If the profile does not match the device or a file does not match its declared size/SHA-256, Root My Galaxy stops instead of treating it as valid.
+The maintained CZG3 profile uses exact device identity plus size and SHA-256 checks for the executable payloads. If the device or files do not match the expected profile, Root My Galaxy stops instead of treating them as compatible.
 
-The older v2 profile remains present for compatibility with previously released app versions.
-
-## Workflow
-
-The repository intentionally exposes only one GitHub Actions workflow: **Atualizar Payloads**.
-
-It can rebuild `Exploit`, `KernelSU`, or both. Validation runs inside that same workflow before anything is pushed. When files actually change, the workflow commits them to `main` and, by default, dispatches **Gerar APK Release** in the Root My Galaxy repository.
-
-If a rebuild produces byte-identical output, no commit is created and no unnecessary APK release is triggered.
+The older v2 profile remains available for compatibility with previously released app versions.
 
 ## License and credits
 
