@@ -38,15 +38,10 @@ ROOT_HELPER := $(OUTDIR)/cve-2026-43499-root
 TARGET_CFLAGS :=
 APP_RELEASE_OPT := -Oz
 APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s
-APP_RELEASE_EXTRA_CFLAGS :=
-APP_RELEASE_FIXED_SIZE := 1
 
-# CZG3 has one canonical v3 payload. Race telemetry is part of that release;
-# there is no parallel "diagnostic" payload/feed for the same firmware.
-ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
-APP_RELEASE_EXTRA_CFLAGS := -DCZG3_RACE_TELEMETRY=1
-APP_RELEASE_FIXED_SIZE := 0
-endif
+# The canonical CZG3 payload must keep the hardware-validated race path free of
+# race telemetry. Instrumenting the scheduler-sensitive path changed timing and
+# caused device stalls / RACE_STATE_UNCERTAIN failures on real hardware.
 
 PRELOAD_SRCS := \
   src/main.c \
@@ -118,7 +113,7 @@ $(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h s
 	  -shared -pthread -Wl,--no-undefined -o $@
 
 $(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
-	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_RELEASE_EXTRA_CFLAGS) $(APP_TARGET_CFLAGS) -fPIC $(APP_RELEASE_OPT) -g0 \
+	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_TARGET_CFLAGS) -fPIC $(APP_RELEASE_OPT) -g0 \
 	  -fno-unwind-tables -fno-asynchronous-unwind-tables \
 	  -ffunction-sections -fdata-sections \
 	  -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare \
@@ -126,10 +121,8 @@ $(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h s
 	  $(TARGET_CFLAGS) \
 	  $(APP_PRELOAD_SRCS) -shared -pthread \
 	  $(APP_RELEASE_LINK_FLAGS) -o $@
-	@if [ "$(APP_RELEASE_FIXED_SIZE)" = "1" ]; then \
-	  test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE); \
-	  truncate -s $(APP_RELEASE_SIZE) $@; \
-	fi
+	@test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE)
+	truncate -s $(APP_RELEASE_SIZE) $@
 
 $(APP_STABLE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 -DAPP_S928_STABLE_RACE=1 \
