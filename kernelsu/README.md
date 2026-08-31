@@ -108,8 +108,10 @@ llvm-strip -d kernel/kernelsu.ko
 After copying that module to
 `userspace/ksud/bin/aarch64/android15-6.6_kernelsu.ko`, force a non-stale NDK r29
 build with `cargo clean -p ksud` followed by
-`cargo build --release --target aarch64-linux-android -p ksud`. The staged
-`/data/local/tmp/.ksud-stage` rename and `ksud late-load` contract are preserved.
+`cargo build --release --target aarch64-linux-android -p ksud`. The late-load path copies the already-downloaded running executable from
+`/proc/self/exe` before the module changes its security context; it does not
+depend on an uncreated `.ksud-stage` file. The `ksud late-load` contract is
+preserved.
 
 Published CZG3 artifacts (stored as Git LFS objects so branch updates and reviews contain textual pointers rather than unsupported inline binary patches):
 
@@ -119,8 +121,8 @@ size: 332416
 SHA-256: fa80d308aa26b895603d25ad40f0568b88c1e90332c5dfffdb50d3dc86aa2e49
 
 ksud-s25u-kdp-v3.3.0
-size: 4823504
-SHA-256: 46c6bd8eb251d28ee22fd846cd6959e9e6da66ba74421a01f917d4e927818953
+size: 4823128
+SHA-256: 85b550f7527be35ff8a44689cefea96e5faafd636a74ef66dda00a367deeff74
 ```
 
 Static validation confirmed AArch64 ELF64, exact vermagic, 215 undefined symbols
@@ -167,9 +169,8 @@ contains the complete source delta from the tagged v3.2.5 tree:
   syscall kprobes without modifying the syscall table;
 - mark nested sucompat calls so a handler invoking the original syscall cannot
   recursively enter the same kprobe;
-- stage `ksud` at `/data/local/tmp/.ksud-stage`, rename it onto the same
-  `/data` filesystem before loading the module, then finish labels/assets after
-  the module is active.
+- copy the already-downloaded running `ksud` from `/proc/self/exe` before
+  loading the module, then finish labels/assets after the module is active.
 
 ## 6.1 generalization
 

@@ -1,5 +1,5 @@
 diff --git a/kernel/Kbuild b/kernel/Kbuild
-index 85932d39..c840099a 100644
+index 85932d3..c840099 100644
 --- a/kernel/Kbuild
 +++ b/kernel/Kbuild
 @@ -1,5 +1,8 @@
@@ -56,7 +56,7 @@ index 85932d39..c840099a 100644
  KSU_NEW_DCACHE_FLUSH := $(shell grep -q __flush_dcache_area $(srctree)/arch/arm64/include/asm/cacheflush.h ; echo $$?)
 diff --git a/kernel/compat/samsung_defex.c b/kernel/compat/samsung_defex.c
 new file mode 100644
-index 00000000..bd384dc8
+index 0000000..bd384dc
 --- /dev/null
 +++ b/kernel/compat/samsung_defex.c
 @@ -0,0 +1,98 @@
@@ -160,7 +160,7 @@ index 00000000..bd384dc8
 +}
 diff --git a/kernel/compat/samsung_defex.h b/kernel/compat/samsung_defex.h
 new file mode 100644
-index 00000000..f635af65
+index 0000000..f635af6
 --- /dev/null
 +++ b/kernel/compat/samsung_defex.h
 @@ -0,0 +1,8 @@
@@ -174,7 +174,7 @@ index 00000000..f635af65
 +#endif
 diff --git a/kernel/compat/samsung_kdp.c b/kernel/compat/samsung_kdp.c
 new file mode 100644
-index 00000000..b882f099
+index 0000000..b882f09
 --- /dev/null
 +++ b/kernel/compat/samsung_kdp.c
 @@ -0,0 +1,204 @@
@@ -383,7 +383,7 @@ index 00000000..b882f099
 +#endif
 +}
 diff --git a/kernel/core/init.c b/kernel/core/init.c
-index e9cd1023..62ed6400 100644
+index e9cd102..62ed640 100644
 --- a/kernel/core/init.c
 +++ b/kernel/core/init.c
 @@ -8,6 +8,7 @@
@@ -454,7 +454,7 @@ index e9cd1023..62ed6400 100644
  
  #if NEED_OWN_STACKPROTECTOR
 diff --git a/kernel/feature/sucompat.c b/kernel/feature/sucompat.c
-index 1ba7b58e..97d02b6b 100644
+index 1ba7b58..97d02b6 100644
 --- a/kernel/feature/sucompat.c
 +++ b/kernel/feature/sucompat.c
 @@ -267,7 +267,7 @@ void __init ksu_sucompat_init()
@@ -467,7 +467,7 @@ index 1ba7b58e..97d02b6b 100644
      ksu_unregister_feature_handler(KSU_FEATURE_SU_COMPAT);
  }
 diff --git a/kernel/hook/arm64/patch_memory.c b/kernel/hook/arm64/patch_memory.c
-index 670f3bd0..8e53eb31 100644
+index 670f3bd..8e53eb3 100644
 --- a/kernel/hook/arm64/patch_memory.c
 +++ b/kernel/hook/arm64/patch_memory.c
 @@ -188,6 +188,11 @@ static int ksu_patch_text_cb(void *arg)
@@ -491,7 +491,7 @@ index 670f3bd0..8e53eb31 100644
  
  /*
 diff --git a/kernel/hook/arm64/syscall_hook.c b/kernel/hook/arm64/syscall_hook.c
-index f8d052c3..81e76c32 100644
+index f8d052c..81e76c3 100644
 --- a/kernel/hook/arm64/syscall_hook.c
 +++ b/kernel/hook/arm64/syscall_hook.c
 @@ -48,13 +48,15 @@ static int patch_syscall_table(int nr, syscall_fn_t fn)
@@ -563,7 +563,7 @@ index f8d052c3..81e76c32 100644
  }
  
 diff --git a/kernel/hook/syscall_hook.h b/kernel/hook/syscall_hook.h
-index 944f43f6..f6abeac6 100644
+index 944f43f..f6abeac 100644
 --- a/kernel/hook/syscall_hook.h
 +++ b/kernel/hook/syscall_hook.h
 @@ -37,7 +37,7 @@ bool ksu_has_syscall_hook(int nr);
@@ -576,7 +576,7 @@ index 944f43f6..f6abeac6 100644
  // Restore syscall_table[@nr] to its original value recorded by
  // ksu_syscall_table_hook(), and remove the entry from the tracking list.
 diff --git a/kernel/hook/syscall_hook_manager.c b/kernel/hook/syscall_hook_manager.c
-index e5b179ea..039c83e4 100644
+index e5b179e..039c83e 100644
 --- a/kernel/hook/syscall_hook_manager.c
 +++ b/kernel/hook/syscall_hook_manager.c
 @@ -5,6 +5,7 @@
@@ -929,7 +929,7 @@ index e5b179ea..039c83e4 100644
      unregister_trace_sys_enter(ksu_sys_enter_handler, NULL);
      tracepoint_synchronize_unregister();
 diff --git a/kernel/hook/tp_marker.c b/kernel/hook/tp_marker.c
-index c78bbbdd..5666403a 100644
+index c78bbbd..5666403 100644
 --- a/kernel/hook/tp_marker.c
 +++ b/kernel/hook/tp_marker.c
 @@ -7,6 +7,7 @@
@@ -951,7 +951,7 @@ index c78bbbdd..5666403a 100644
  }
 diff --git a/kernel/include/ksu_samsung_kdp.h b/kernel/include/ksu_samsung_kdp.h
 new file mode 100644
-index 00000000..9cdbc812
+index 0000000..9cdbc81
 --- /dev/null
 +++ b/kernel/include/ksu_samsung_kdp.h
 @@ -0,0 +1,24 @@
@@ -980,7 +980,7 @@ index 00000000..9cdbc812
 +
 +#endif
 diff --git a/kernel/policy/app_profile.c b/kernel/policy/app_profile.c
-index 518ef414..13bfa134 100644
+index 518ef41..13bfa13 100644
 --- a/kernel/policy/app_profile.c
 +++ b/kernel/policy/app_profile.c
 @@ -18,6 +18,8 @@
@@ -1015,7 +1015,7 @@ index 518ef414..13bfa134 100644
  
  void __init ksu_app_profile_init(void)
 diff --git a/userspace/ksud/src/late_load.rs b/userspace/ksud/src/late_load.rs
-index 8e6f0fe6..83d46eee 100644
+index 8e6f0fe..f0f8b3d 100644
 --- a/userspace/ksud/src/late_load.rs
 +++ b/userspace/ksud/src/late_load.rs
 @@ -1,7 +1,6 @@
@@ -1038,7 +1038,7 @@ index 8e6f0fe6..83d46eee 100644
  
 +    // Copy the daemon before loading the module changes this process's
 +    // security context. The remaining install steps require KernelSU policy.
-+    utils::stage_daemon_from("/data/local/tmp/.ksud-stage").context("Failed to stage ksud")?;
++    utils::stage_daemon().context("Failed to stage the running ksud")?;
 +
      // 1. Check if KernelSU is already loaded
      if ksuinit::has_kernelsu() {
@@ -1072,26 +1072,23 @@ index 8e6f0fe6..83d46eee 100644
      Ok(())
  }
 diff --git a/userspace/ksud/src/utils.rs b/userspace/ksud/src/utils.rs
-index 0e9ba510..e831810b 100644
+index 0e9ba51..8a4f22a 100644
 --- a/userspace/ksud/src/utils.rs
 +++ b/userspace/ksud/src/utils.rs
-@@ -1,7 +1,8 @@
- use anyhow::{Context, Error, Ok, Result, bail};
--use rustix::fs::{Mode, OFlags, open};
-+use rustix::fs::{Mode, OFlags, chown, open};
- use rustix::process::setpgid;
- use rustix::stdio::{dup2_stderr, dup2_stdin, dup2_stdout};
-+use rustix::thread::{Gid, Uid};
- use std::{
-     ffi::{CStr, CString, c_char, c_void},
-     fs::{File, OpenOptions, create_dir_all, remove_file, write},
-@@ -231,15 +232,34 @@ fn link_ksud_to_bin() -> Result<()> {
+@@ -231,15 +231,19 @@ fn link_ksud_to_bin() -> Result<()> {
      Ok(())
  }
  
 -pub fn install(libadbroot: Option<PathBuf>, data_path: Option<PathBuf>) -> Result<()> {
 +pub fn stage_daemon() -> Result<()> {
-+    ensure_dir_exists(defs::ADB_DIR)?;
+     ensure_dir_exists(defs::ADB_DIR)?;
+-    let _ = std::fs::remove_file(defs::DAEMON_PATH);
+-    std::fs::copy(
+-        // We should use /proc/self/exe, DO NOT resolve the real path
+-        // So that if someone execute /data/adb/ksud install, ksud won't be removed unexpectedly
+-        "/proc/self/exe",
+-        defs::DAEMON_PATH,
+-    )?;
 +    let current_exe = Path::new("/proc/self/exe");
 +    if std::fs::canonicalize(current_exe).ok().as_deref() == Some(Path::new(defs::DAEMON_PATH)) {
 +        return Ok(());
@@ -1102,33 +1099,11 @@ index 0e9ba510..e831810b 100644
 +    Ok(())
 +}
 +
-+pub fn stage_daemon_from(staged_exe: impl AsRef<Path>) -> Result<()> {
-     ensure_dir_exists(defs::ADB_DIR)?;
--    let _ = std::fs::remove_file(defs::DAEMON_PATH);
--    std::fs::copy(
--        // We should use /proc/self/exe, DO NOT resolve the real path
--        // So that if someone execute /data/adb/ksud install, ksud won't be removed unexpectedly
--        "/proc/self/exe",
--        defs::DAEMON_PATH,
--    )?;
-+    std::fs::rename(staged_exe.as_ref(), defs::DAEMON_PATH).with_context(|| {
-+        format!(
-+            "Failed to rename {} to {}",
-+            staged_exe.as_ref().display(),
-+            defs::DAEMON_PATH
-+        )
-+    })?;
-+    chown(defs::DAEMON_PATH, Some(Uid::ROOT), Some(Gid::ROOT))?;
-+    #[cfg(unix)]
-+    set_permissions(defs::DAEMON_PATH, Permissions::from_mode(0o755))?;
-+    Ok(())
-+}
-+
 +pub fn finish_install(libadbroot: Option<PathBuf>, data_path: Option<PathBuf>) -> Result<()> {
      restorecon::lsetfilecon(defs::DAEMON_PATH, restorecon::KSU_CON)?;
      // install binary assets
      assets::ensure_binaries(false).with_context(|| "Failed to extract assets")?;
-@@ -277,6 +297,11 @@ pub fn install(libadbroot: Option<PathBuf>, data_path: Option<PathBuf>) -> Resul
+@@ -277,6 +281,11 @@ pub fn install(libadbroot: Option<PathBuf>, data_path: Option<PathBuf>) -> Resul
      Ok(())
  }
  
@@ -1140,7 +1115,7 @@ index 0e9ba510..e831810b 100644
  pub fn uninstall(package_name: &str) -> Result<()> {
      if Path::new(defs::MODULE_DIR).exists() {
          println!("- Uninstall modules..");
-@@ -321,10 +346,6 @@ pub fn daemonize_with<F: FnOnce() -> Result<()>>(use_init_pgrp: bool, configure:
+@@ -321,10 +330,6 @@ pub fn daemonize_with<F: FnOnce() -> Result<()>>(use_init_pgrp: bool, configure:
      Ok(())
  }
  

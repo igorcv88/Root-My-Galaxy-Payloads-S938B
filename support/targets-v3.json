@@ -26,8 +26,8 @@
       },
       "kernelsu": {
         "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-S938B/main/kernelsu/ksud-s25u-kdp-v3.3.0",
-        "size": 4823504,
-        "sha256": "46c6bd8eb251d28ee22fd846cd6959e9e6da66ba74421a01f917d4e927818953"
+        "size": 4823128,
+        "sha256": "85b550f7527be35ff8a44689cefea96e5faafd636a74ef66dda00a367deeff74"
       }
     }
   ]
