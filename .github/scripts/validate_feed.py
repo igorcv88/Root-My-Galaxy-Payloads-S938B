@@ -10,8 +10,8 @@ PREFIX = (
     "https://raw.githubusercontent.com/igorcv88/"
     "Root-My-Galaxy-Payloads-S938B/main/"
 )
-KNOWN_PRE_TELEMETRY_SHA256 = (
-    "bc7dacd90796cfbf0d6e008b478072f52a1e6d5c4bf31f282a305e42ae1d6861"
+CANONICAL_EXPLOIT = pathlib.Path(
+    "artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so"
 )
 EXPECTED_IDENTITY = {
     "manufacturer": "samsung",
@@ -60,11 +60,9 @@ def validate_artifact(artifact: dict) -> pathlib.Path:
 
 
 def main() -> None:
-    # v2 remains frozen only for legacy compatibility. New app/manual/Auto Root
-    # behavior is driven exclusively by the single v3 feed below.
     v2 = json.loads((ROOT / "support/targets-v2.json").read_text(encoding="utf-8"))
     assert v2.get("schemaVersion") == 2
-    assert len(v2.get("targets", [])) == 1, "legacy v2 feed must remain S938B-only"
+    assert len(v2.get("targets", [])) == 1, "v2 feed must remain S938B-only"
     legacy = v2["targets"][0]
     assert legacy["profileId"] == "pa3q-S938BXXSBCZG3"
     assert legacy["manufacturer"] == EXPECTED_IDENTITY["manufacturer"]
@@ -78,17 +76,6 @@ def main() -> None:
     assert legacy["abi"] == EXPECTED_IDENTITY["abi"]
     assert legacy["pageSize"] == EXPECTED_IDENTITY["pageSize"]
 
-    legacy_exploit = local_path(legacy["exploit"]["url"])
-    assert legacy_exploit.is_file()
-    assert legacy_exploit.stat().st_size == legacy["exploit"]["size"] == 104128
-    assert sha256(legacy_exploit) == (
-        "ba0894d1214e3c46305d8acb0ab065eb110833b4b9973c9250aca5bfcb98c214"
-    ), "legacy hardware-validated exploit changed"
-
-    legacy_ksud = local_path(legacy["kernelsu"]["url"])
-    assert legacy_ksud.is_file()
-    assert legacy_ksud.stat().st_size == legacy["kernelsu"]["size"]
-
     v3 = json.loads((ROOT / "support/targets-v3.json").read_text(encoding="utf-8"))
     assert v3.get("schemaVersion") == 3
     payloads = v3.get("payloads")
@@ -98,7 +85,10 @@ def main() -> None:
     assert all(isinstance(payload_id, str) and payload_id for payload_id in ids)
     assert len(ids) == len(set(ids)), "v3 payloadIds must be unique"
 
-    matches = [payload for payload in payloads if payload.get("payloadId") == "pa3q-S938BXXSBCZG3"]
+    matches = [
+        payload for payload in payloads
+        if payload.get("payloadId") == "pa3q-S938BXXSBCZG3"
+    ]
     assert len(matches) == 1, "exact CZG3 payload must exist exactly once"
     target = matches[0]
     assert target["models"] == ["SM-S938B"]
@@ -107,25 +97,31 @@ def main() -> None:
 
     exploit = validate_artifact(target["exploit"])
     validate_artifact(target["kernelsu"])
-    exploit_bytes = exploit.read_bytes()
-    exploit_digest = sha256(exploit)
-    assert exploit_bytes != legacy_exploit.read_bytes(), (
-        "v2 legacy and v3 payloads unexpectedly became identical"
-    )
 
-    # The known 104128-byte CZG3 payload is allowed only as the last-good
-    # pre-publication fallback. Every newly generated canonical payload must
-    # retain the diagnostic protocol rather than solving regressions by
-    # deleting telemetry.
-    if exploit_digest != KNOWN_PRE_TELEMETRY_SHA256:
-        for marker in (b"RMG_RACE_V1", b"RMG_SCHED_V1", b"RMG_SYS_V1"):
-            assert marker in exploit_bytes, (
-                f"canonical CZG3 v3 payload is missing {marker.decode()}"
-            )
+    expected_path = ROOT / CANONICAL_EXPLOIT
+    assert exploit == expected_path, "v3 exploit must use the single canonical main path"
+    legacy_exploit = local_path(legacy["exploit"]["url"])
+    assert legacy_exploit == expected_path, "v2 and v3 must share the canonical exploit"
+    assert legacy["exploit"]["size"] == target["exploit"]["size"] == exploit.stat().st_size
+
+    exploit_bytes = exploit.read_bytes()
+    for marker in (b"RMG_RACE_V1", b"RMG_SCHED_V1", b"RMG_SYS_V1"):
+        assert marker in exploit_bytes, (
+            f"canonical CZG3 payload is missing {marker.decode()}"
+        )
+
+    versioned = sorted((ROOT / "artifacts").glob("pa3q-S938BXXSBCZG3-v*"))
+    assert not versioned, (
+        "versioned CZG3 artifacts are forbidden; use only "
+        f"{CANONICAL_EXPLOIT.as_posix()}"
+    )
 
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/target.h").is_file()
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h").is_file()
-    print(f"Payload feed is valid ({len(payloads)} profile(s); one canonical CZG3 v3 payload)")
+    print(
+        "Payload feed is valid "
+        f"({len(payloads)} profile(s); one canonical CZG3 payload on main)"
+    )
 
 
 if __name__ == "__main__":
