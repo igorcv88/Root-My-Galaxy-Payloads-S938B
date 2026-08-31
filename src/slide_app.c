@@ -162,8 +162,6 @@ static atomic_int slide_route_done;
 static atomic_int slide_route_stop;
 #endif
 static atomic_int slide_waiter_tid;
-static atomic_int slide_owner_tid;
-static atomic_int slide_consumer_tid;
 static atomic_int slide_consume_calls;
 static atomic_int slide_consume_go;
 static atomic_int slide_consume_seen;
@@ -1120,7 +1118,6 @@ RMG_RACE_INLINE void slide_pselect_stack_copy(void) {
   fd_set ex;
   prepare_slide_pselect_fdsets(&in, &out, &ex);
   open_slide_selected_fds(&in, &out, &ex, high_read);
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_PSELECT_PREPARE_COMPLETE, 0, 0);
 
   slide_reset_consume_state();
 
@@ -1155,14 +1152,11 @@ RMG_RACE_INLINE void slide_pselect_stack_copy(void) {
   atomic_store(&slide_consume_go, 1);
 #endif
   errno = 0;
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_PSELECT_ENTER, 0, 0);
   int ret = (int)syscall(SYS_pselect6, slide_route_nfds,
                          &in, &out, &ex, timeoutp, NULL);
   int saved_errno = errno;
   size_t pselect_elapsed_usec =
       (gettime_ns() - pselect_started) / 1000ULL;
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_PSELECT_RETURN,
-                   ret, saved_errno);
 #if defined(APP_S928_ROUTE_DIAG) && APP_S928_ROUTE_DIAG
   atomic_store(&slide_pselect_last_ret, ret);
   atomic_store(&slide_pselect_last_errno, saved_errno);
@@ -1671,11 +1665,6 @@ void *slide_consumer_thread(void *arg __attribute__((unused))) {
   disable_rseq_for_thread();
 #endif
   pin_to_core(CONSUMER_CORE);
-  int consumer_tid = (int)syscall(SYS_gettid);
-  atomic_store(&slide_consumer_tid, consumer_tid);
-  czg3_race_thread_snapshot("pre", CZG3_RACE_CONSUMER, consumer_tid);
-  czg3_race_record(CZG3_RACE_CONSUMER, CZG3_RACE_THREAD_READY,
-                   consumer_tid, sched_getcpu());
   atomic_store(&slide_consumer_ready, 1);
   int *errno_ptr = &errno;
 
@@ -1692,8 +1681,6 @@ void *slide_consumer_thread(void *arg __attribute__((unused))) {
 
     seen = seq;
     atomic_store(&slide_consume_seen, seen);
-    czg3_race_record(CZG3_RACE_CONSUMER, CZG3_RACE_CONSUMER_ARMED, seq, 0);
-    czg3_race_record(CZG3_RACE_CONSUMER, CZG3_RACE_DELAY_BEGIN, seq, 0);
     if (atomic_load(&slide_consume_go) != seq) {
       int lost = atomic_load(&slide_consume_lost) + 1;
       atomic_store(&slide_consume_lost, lost);
@@ -1809,22 +1796,14 @@ void *slide_consumer_thread(void *arg __attribute__((unused))) {
     if (seq == 1) {
       slide_apply_route_fine_delay();
     }
-    czg3_race_record(CZG3_RACE_CONSUMER, CZG3_RACE_DELAY_END, seq, 0);
 
     int calls = atomic_load(&slide_consume_calls);
     int entered = atomic_load(&slide_consume_enter_sched) + 1;
     atomic_store(&slide_consume_enter_sched, entered);
     atomic_store(&slide_consume_calls, calls + 1);
     *errno_ptr = 0;
-    czg3_race_record(CZG3_RACE_CONSUMER, CZG3_RACE_CONSUMER_ACTION_BEGIN,
-                     tid, calls);
     long ret = sched_setattr_tid(tid, (calls % 19) + 1);
     int saved_errno = *errno_ptr;
-    czg3_race_record(CZG3_RACE_CONSUMER,
-                     CZG3_RACE_READINESS_OPERATION_COMPLETE,
-                     ret, saved_errno);
-    czg3_race_record(CZG3_RACE_CONSUMER, CZG3_RACE_CONSUMER_ACTION_END,
-                     ret, saved_errno);
 #if defined(SLIDE_SYNC_PSELECT_SYSCALL) && SLIDE_SYNC_PSELECT_SYSCALL
     pr_info("slide pselect blocked ready=%d ready_usec=%zu ready_wchan=%s "
             "guard=%d guard_usec=%zu guard_wchan=%s age_usec=%llu tid=%d\n",
@@ -1842,8 +1821,6 @@ void *slide_consumer_thread(void *arg __attribute__((unused))) {
     while (atomic_load(&slide_consume_go)) {
       __asm__ volatile("yield" ::: "memory");
     }
-    czg3_race_thread_snapshot("post", CZG3_RACE_CONSUMER,
-                              consumer_tid);
     return NULL;
   }
 }
@@ -1857,9 +1834,6 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
 #if defined(SLIDE_WAITER_CORE)
   pin_to_core(SLIDE_WAITER_CORE);
 #endif
-  czg3_race_thread_snapshot("pre", CZG3_RACE_WAITER, tid);
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_THREAD_READY,
-                   tid, sched_getcpu());
 
   if (futex_op(&slide_f_pi_chain, FUTEX_LOCK_PI, 0, NULL, NULL, 0) != 0) {
     pr_error("slide waiter lock chain errno=%d\n", errno);
@@ -1882,12 +1856,9 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
 
   atomic_store(&slide_waiter_waiting, 1);
   errno = 0;
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_WAIT_REQUEUE_ENTER, 0, 0);
   long wait_ret = futex_op(&slide_f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout,
                            &slide_f_pi_target, 0);
   int wait_errno = errno;
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_WAIT_REQUEUE_RETURN,
-                   wait_ret, wait_errno);
 #if !(defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE)
   pr_info("slide wait_requeue_pi ret=%ld errno=%d\n", wait_ret, wait_errno);
 #endif
@@ -1896,25 +1867,21 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
     return NULL;
   }
   pr_info("slide pi stage=wait-timeout-accepted tid=%d\n", tid);
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_WAITER_TIMEOUT_ACCEPTED, 0, 0);
   atomic_store(&slide_waiter_ok, 1);
   while (!atomic_load(&slide_deadlock_seen)) {
     __asm__ volatile("yield" ::: "memory");
   }
   pr_info("slide pi stage=waiter-unlock-enter tid=%d\n", tid);
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_WAITER_UNLOCK_ENTER, 0, 0);
   if (futex_op(&slide_f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0) != 0) {
     pr_error("slide waiter unlock chain errno=%d\n", errno);
     atomic_store(&slide_route_done, 1);
     return NULL;
   }
   pr_info("slide pi stage=waiter-unlock-return tid=%d\n", tid);
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_WAITER_UNLOCK_RETURN, 0, 0);
   while (!atomic_load(&slide_owner_acquired)) {
     __asm__ volatile("yield" ::: "memory");
   }
   pr_info("slide pi stage=writer-enter tid=%d\n", tid);
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_WRITER_ENTER, 0, 0);
   app_publish_writer_entered();
 
 #if defined(SLIDE_STACK_WRITER) && \
@@ -1930,8 +1897,6 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
 #else
   slide_pselect_stack_copy();
 #endif
-  czg3_race_record(CZG3_RACE_WAITER, CZG3_RACE_WRITER_RETURN,
-                   atomic_load(&slide_stack_write_window), 0);
   pr_info("slide pi stage=writer-return tid=%d sched_ok=%d window=%d\n",
           tid, atomic_load(&slide_consume_sched_ok),
           atomic_load(&slide_stack_write_window));
@@ -1950,18 +1915,12 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
 }
 
 void *slide_owner_thread(void *arg __attribute__((unused))) {
-  int owner_tid = (int)syscall(SYS_gettid);
-  atomic_store(&slide_owner_tid, owner_tid);
-  czg3_race_thread_snapshot("pre", CZG3_RACE_OWNER, owner_tid);
-  czg3_race_record(CZG3_RACE_OWNER, CZG3_RACE_THREAD_READY,
-                   owner_tid, sched_getcpu());
   if (futex_op(&slide_f_pi_target, FUTEX_LOCK_PI, 0, NULL, NULL, 0) != 0) {
     pr_error("slide owner lock target errno=%d\n", errno);
     return NULL;
   }
   pr_info("slide pi stage=owner-target-locked tid=%d\n",
           (int)syscall(SYS_gettid));
-  czg3_race_record(CZG3_RACE_OWNER, CZG3_RACE_OWNER_TARGET_LOCKED, 0, 0);
 
   while (!atomic_load(&slide_waiter_ready)) {
     usleep(1000);
@@ -1970,7 +1929,6 @@ void *slide_owner_thread(void *arg __attribute__((unused))) {
   atomic_store(&slide_owner_started, 1);
   pr_info("slide pi stage=owner-chain-lock-enter tid=%d\n",
           (int)syscall(SYS_gettid));
-  czg3_race_record(CZG3_RACE_OWNER, CZG3_RACE_OWNER_CHAIN_LOCK_ENTER, 0, 0);
   if (futex_op(&slide_f_pi_chain, FUTEX_LOCK_PI, 0, NULL, NULL, 0) != 0) {
     pr_error("slide owner lock chain errno=%d\n", errno);
     return NULL;
@@ -1978,7 +1936,6 @@ void *slide_owner_thread(void *arg __attribute__((unused))) {
   atomic_store(&slide_owner_acquired, 1);
   pr_info("slide pi stage=owner-chain-lock-return tid=%d\n",
           (int)syscall(SYS_gettid));
-  czg3_race_record(CZG3_RACE_OWNER, CZG3_RACE_OWNER_CHAIN_LOCK_RETURN, 0, 0);
 
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
   while (!atomic_load(&slide_route_stop)) {
@@ -2112,10 +2069,6 @@ uint64_t slide_child_leak_stext(void) {
 
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
 static int slide_child_trigger_write(void) {
-  czg3_race_reset(1);
-  czg3_race_system_snapshot("pre_fops");
-  czg3_race_thread_snapshot("pre", CZG3_RACE_PARENT,
-                            (int)syscall(SYS_gettid));
   pthread_t waiter;
   pthread_t owner;
   pthread_t consumer;
@@ -2133,7 +2086,6 @@ static int slide_child_trigger_write(void) {
   }
   pr_info("slide pi stage=cmp-enter waiter_tid=%d\n",
           atomic_load(&slide_waiter_tid));
-  czg3_race_record(CZG3_RACE_PARENT, CZG3_RACE_CMP_ENTER, 0, 0);
 
   long requeue_ret = 0;
   int requeue_errno = 0;
@@ -2153,17 +2105,7 @@ static int slide_child_trigger_write(void) {
   }
   pr_info("slide pi stage=cmp-return ret=%ld errno=%d polls=%d\n",
           requeue_ret, requeue_errno, requeue_polls);
-  czg3_race_record(CZG3_RACE_PARENT, CZG3_RACE_CMP_RETURN,
-                   requeue_ret, requeue_errno);
   if (requeue_ret != -1 || requeue_errno != EDEADLK) {
-    czg3_race_thread_snapshot("post", CZG3_RACE_PARENT,
-                              (int)syscall(SYS_gettid));
-    czg3_race_thread_snapshot("post", CZG3_RACE_WAITER,
-                              atomic_load(&slide_waiter_tid));
-    czg3_race_thread_snapshot("post", CZG3_RACE_OWNER,
-                              atomic_load(&slide_owner_tid));
-    czg3_race_system_snapshot("post_fops");
-    czg3_race_dump();
     return 0;
   }
   pr_info("slide pi stage=deadlock-accepted\n");
@@ -2171,14 +2113,6 @@ static int slide_child_trigger_write(void) {
   while (!atomic_load(&slide_route_done)) {
     usleep(1000);
   }
-  czg3_race_thread_snapshot("post", CZG3_RACE_PARENT,
-                            (int)syscall(SYS_gettid));
-  czg3_race_thread_snapshot("post", CZG3_RACE_WAITER,
-                            atomic_load(&slide_waiter_tid));
-  czg3_race_thread_snapshot("post", CZG3_RACE_OWNER,
-                            atomic_load(&slide_owner_tid));
-  czg3_race_system_snapshot("post_fops");
-  czg3_race_dump();
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
 #if defined(APP_S928_ROUTE_DIAG) && APP_S928_ROUTE_DIAG
   int waiter_ok = atomic_load(&slide_waiter_ok);
