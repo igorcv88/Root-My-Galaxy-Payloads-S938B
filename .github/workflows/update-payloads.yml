@@ -12,11 +12,6 @@ on:
           - "Exploit"
           - "KernelSU"
           - "Exploit + KernelSU"
-      gerar_apk:
-        description: "Gerar APK Release depois?"
-        required: true
-        default: true
-        type: boolean
 
 permissions:
   contents: write
@@ -32,7 +27,6 @@ env:
   KSU_TAG_SHA: 932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e
   MODULE_NAME: android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
   KSUD_NAME: ksud-s25u-kdp-v3.3.0
-  APP_REPOSITORY: igorcv88/Root-My-Galaxy-S938B
 
 jobs:
   update:
@@ -43,17 +37,6 @@ jobs:
       UPDATE_MODE: ${{ inputs.atualizar }}
 
     steps:
-      - name: Confirmar integração com Root My Galaxy
-        if: inputs.gerar_apk
-        env:
-          ROOT_MY_GALAXY_TOKEN: ${{ secrets.ROOT_MY_GALAXY_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${ROOT_MY_GALAXY_TOKEN:-}" ]]; then
-            echo "Secret ROOT_MY_GALAXY_TOKEN ausente. Configure-o ou desative 'Gerar APK Release depois?'." >&2
-            exit 1
-          fi
-
       - name: Baixar repositório
         uses: actions/checkout@v6
         with:
@@ -78,8 +61,13 @@ jobs:
           set -euo pipefail
           make clean
           make TARGET="$TARGET" ANDROID_NDK_HOME="$ANDROID_NDK_HOME" release
-          test -s "build/$TARGET/cve-2026-43499-app.release.so"
-          strings "build/$TARGET/cve-2026-43499-app.release.so" | grep -F 'RMG_RACE_V1'
+          payload="build/$TARGET/cve-2026-43499-app.release.so"
+          test -s "$payload"
+          test "$(stat -c %s "$payload")" -eq 104128
+          if strings "$payload" | grep -E 'RMG_RACE_V1|RMG_SYS_V1'; then
+            echo "O payload canônico não pode conter telemetria que perturbe a corrida." >&2
+            exit 1
+          fi
 
       - name: Preparar KernelSU
         if: contains(inputs.atualizar, 'KernelSU')
@@ -233,34 +221,34 @@ jobs:
           git diff --check
 
       - name: Publicar no repositório
-        id: publish
         run: |
           set -euo pipefail
           git config user.name "Root My Galaxy"
           git config user.email "root-my-galaxy@users.noreply.github.com"
+
+          EXPLOIT_PATH="$(python3 - <<'PY'
+          import json
+          import urllib.parse
+          manifest = json.load(open('support/targets-v3.json', encoding='utf-8'))
+          target = next(item for item in manifest['payloads'] if item['payloadId'] == 'pa3q-S938BXXSBCZG3')
+          prefix = 'https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-S938B/main/'
+          url = target['exploit']['url']
+          if not url.startswith(prefix):
+              raise SystemExit('Unexpected exploit URL')
+          print(urllib.parse.unquote(url.removeprefix(prefix)))
+          PY
+          )"
+
           git add support/targets-v3.json
-          git add artifacts/pa3q-S938BXXSBCZG3-v0267/cve-2026-43499-app.so
+          git add "$EXPLOIT_PATH"
           git add kernelsu/android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
           git add kernelsu/ksud-s25u-kdp-v3.3.0
           git add kernelsu/README.md
 
           if git diff --cached --quiet; then
             echo "Nenhum arquivo mudou. Nada para publicar."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git commit -m "Update CZG3 payloads: $UPDATE_MODE"
           git push origin HEAD:main
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Disparar nova release do Root My Galaxy
-        if: steps.publish.outputs.changed == 'true' && inputs.gerar_apk
-        env:
-          GH_TOKEN: ${{ secrets.ROOT_MY_GALAXY_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh workflow run release.yml \
-            --repo "$APP_REPOSITORY" \
-            --ref main
-          echo "Workflow 'Gerar APK Release' disparado em $APP_REPOSITORY."
