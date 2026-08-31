@@ -295,7 +295,16 @@ int data_alias_uses_slide = 1;
 int data_addr_canonical;
 char ashmem_path[256] = "/dev/ashmem";
 
-__attribute__((weak)) void app_publish_writer_started(void) {
+__attribute__((weak)) void app_publish_writer_armed(void) {
+}
+__attribute__((weak)) void app_publish_writer_entered(void) {
+}
+__attribute__((weak)) void app_publish_writer_returned(int child_status) {
+  (void)child_status;
+}
+__attribute__((weak)) void app_publish_writer_possible_mutation(void) {
+}
+__attribute__((weak)) void app_publish_writer_verified_success(void) {
 }
 
 __attribute__((weak)) void app_publish_slide_ready(void) {

