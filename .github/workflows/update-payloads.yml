@@ -12,6 +12,11 @@ on:
           - "Exploit"
           - "KernelSU"
           - "Exploit + KernelSU"
+      gerar_apk:
+        description: "Gerar APK Release depois?"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -27,6 +32,7 @@ env:
   KSU_TAG_SHA: 932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e
   MODULE_NAME: android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
   KSUD_NAME: ksud-s25u-kdp-v3.3.0
+  APP_REPOSITORY: igorcv88/Root-My-Galaxy-S938B
 
 jobs:
   update:
@@ -37,6 +43,17 @@ jobs:
       UPDATE_MODE: ${{ inputs.atualizar }}
 
     steps:
+      - name: Confirmar integração com Root My Galaxy
+        if: inputs.gerar_apk
+        env:
+          ROOT_MY_GALAXY_TOKEN: ${{ secrets.ROOT_MY_GALAXY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ROOT_MY_GALAXY_TOKEN:-}" ]]; then
+            echo "Secret ROOT_MY_GALAXY_TOKEN ausente. Configure-o ou desative 'Gerar APK Release depois?'." >&2
+            exit 1
+          fi
+
       - name: Baixar repositório
         uses: actions/checkout@v6
         with:
@@ -142,7 +159,13 @@ jobs:
           root = pathlib.Path.cwd()
           manifest_path = root / "support/targets-v3.json"
           manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          target = manifest["payloads"][0]
+          matches = [
+              item for item in manifest.get("payloads", [])
+              if item.get("payloadId") == "pa3q-S938BXXSBCZG3"
+          ]
+          if len(matches) != 1:
+              raise SystemExit("CZG3 payload must exist exactly once")
+          target = matches[0]
           prefix = (
               "https://raw.githubusercontent.com/igorcv88/"
               "Root-My-Galaxy-Payloads-S938B/main/"
@@ -209,6 +232,7 @@ jobs:
           git diff --check
 
       - name: Publicar no repositório
+        id: publish
         run: |
           set -euo pipefail
           git config user.name "Root My Galaxy"
@@ -221,8 +245,21 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "Nenhum arquivo mudou. Nada para publicar."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git commit -m "Update CZG3 payloads: $UPDATE_MODE"
           git push origin HEAD:main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Disparar nova release do Root My Galaxy
+        if: steps.publish.outputs.changed == 'true' && inputs.gerar_apk
+        env:
+          GH_TOKEN: ${{ secrets.ROOT_MY_GALAXY_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml \
+            --repo "$APP_REPOSITORY" \
+            --ref main
+          echo "Workflow 'Gerar APK Release' disparado em $APP_REPOSITORY."
