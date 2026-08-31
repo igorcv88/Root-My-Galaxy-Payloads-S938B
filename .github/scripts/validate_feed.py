@@ -45,7 +45,7 @@ def sha256(path: pathlib.Path) -> str:
 def validate_artifact(artifact: dict) -> pathlib.Path:
     expected_sha = artifact["sha256"].lower()
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
-        raise AssertionError("invalid SHA-256 in v3 manifest")
+        raise AssertionError("invalid SHA-256 in CZG3 v3 manifest entry")
     path = local_path(artifact["url"])
     if not path.is_file():
         raise AssertionError(f"missing {path.relative_to(ROOT)}")
@@ -87,10 +87,17 @@ def main() -> None:
     v3 = json.loads((ROOT / "support/targets-v3.json").read_text(encoding="utf-8"))
     assert v3.get("schemaVersion") == 3
     payloads = v3.get("payloads")
-    assert isinstance(payloads, list) and len(payloads) == 1, "v3 feed must remain S938B-only"
+    assert isinstance(payloads, list) and payloads, "v3 feed must contain payloads"
 
-    target = payloads[0]
-    assert target["payloadId"] == "pa3q-S938BXXSBCZG3"
+    ids = [payload.get("payloadId") for payload in payloads]
+    assert all(isinstance(payload_id, str) and payload_id for payload_id in ids), (
+        "every v3 payload must have a non-empty payloadId"
+    )
+    assert len(ids) == len(set(ids)), "v3 payloadIds must be unique"
+
+    matches = [payload for payload in payloads if payload.get("payloadId") == "pa3q-S938BXXSBCZG3"]
+    assert len(matches) == 1, "exact CZG3 payload must exist exactly once"
+    target = matches[0]
     assert target["models"] == ["SM-S938B"]
     assert target["kernelVersions"] == ["6.6.98"]
     assert target["exactMatch"] == EXPECTED_IDENTITY, "exact S938B identity drifted"
@@ -103,7 +110,7 @@ def main() -> None:
 
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/target.h").is_file()
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/p0_fingerprint.h").is_file()
-    print("Payload feed is valid")
+    print(f"Payload feed is valid ({len(payloads)} profile(s); CZG3 exact checks passed)")
 
 
 if __name__ == "__main__":
