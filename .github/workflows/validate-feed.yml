@@ -110,7 +110,7 @@ jobs:
               "1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303"
           )
           assert target["kernelsu"]["sha256"] == (
-              "cc246036a6881ee72ac52340220e64c6f6993f9c28f5fe2ea60035b4399bf503"
+              "96b753c28965823f3a310e0abf3e4d0165b1e2f07d2ab736a5ebfe4e1feb6fcb"
           )
           assert synced.read_bytes() != legacy_exploit.read_bytes(), (
               "v2 legacy and v3 synced payloads unexpectedly collapsed"
