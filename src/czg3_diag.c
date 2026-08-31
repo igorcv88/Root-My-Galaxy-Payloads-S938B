@@ -179,13 +179,13 @@ void czg3_race_dump(void) {
     for (uint32_t i = 0; i < trace->count; i++) {
       const struct race_record *r = &trace->records[i];
       const char *event = r->event < sizeof(race_events) / sizeof(race_events[0]) ? race_events[r->event] : "invalid";
-      fprintf(stdout, "RMG_RACE_V1|run=%016llx|attempt=%d|role=%s|event=%s|ts_raw_ns=%llu|arg0=%lld|arg1=%lld\n",
-              (unsigned long long)run_id, race_attempt, race_roles[role], event,
+      fprintf(stdout, "RMG_RACE_V1|run=%016llx|attempt=%d|race=%d|role=%s|event=%s|ts_raw_ns=%llu|arg0=%lld|arg1=%lld\n",
+              (unsigned long long)run_id, race_attempt, getpid(), race_roles[role], event,
               (unsigned long long)r->ts, (long long)r->a0, (long long)r->a1);
     }
   }
-  fprintf(stdout, "RMG_RACE_V1|run=%016llx|attempt=%d|role=parent|event=trace_status|ts_raw_ns=%llu|trace_complete=%d|dropped_events=%u\n",
-          (unsigned long long)run_id, race_attempt,
+  fprintf(stdout, "RMG_RACE_V1|run=%016llx|attempt=%d|race=%d|role=parent|event=trace_status|ts_raw_ns=%llu|trace_complete=%d|dropped_events=%u\n",
+          (unsigned long long)run_id, race_attempt, getpid(),
           (unsigned long long)now_ns(CLOCK_MONOTONIC_RAW), dropped == 0, dropped);
 }
 
