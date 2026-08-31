@@ -1,3 +1,1 @@
 support/targets-v2.json text eol=lf
-kernelsu/ksud-s25u-kdp-v3.3.0 filter=lfs diff=lfs merge=lfs -text
-kernelsu/android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko filter=lfs diff=lfs merge=lfs -text
