@@ -1,15 +1,10 @@
 name: Rebuild CZG3 KernelSU v3.3.0 artifacts
 
 on:
-  push:
-    branches:
-      - repair/rebuild-kernelsu-v330-artifacts
-    paths:
-      - .github/workflows/rebuild-kernelsu-v330.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: rebuild-czg3-kernelsu-v330
@@ -46,8 +41,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
 
-          # Keep the Samsung forward-port as one deterministic local source commit
-          # so KernelSU's git-based version calculation reports 32602.
+          # Apply the Samsung forward-port as one deterministic local commit so
+          # KernelSU's git-based version calculation reports 32602.
           git config user.name "Root My Galaxy CI"
           git config user.email "root-my-galaxy-ci@users.noreply.github.com"
           git add -A
@@ -152,100 +147,3 @@ jobs:
           path: out/ksud/${{ env.KSUD_NAME }}
           if-no-files-found: error
           retention-days: 7
-
-  publish-branch:
-    runs-on: ubuntu-latest
-    needs: [module, ksud]
-    steps:
-      - name: Checkout repair branch
-        uses: actions/checkout@v4
-        with:
-          ref: repair/rebuild-kernelsu-v330-artifacts
-          fetch-depth: 0
-          lfs: false
-
-      - name: Download module
-        uses: actions/download-artifact@v4
-        with:
-          name: czg3-kernelsu-module
-          path: out/module
-
-      - name: Download ksud
-        uses: actions/download-artifact@v4
-        with:
-          name: czg3-ksud
-          path: out/ksud
-
-      - name: Publish real Git blobs and synchronize feed metadata
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cp "out/module/$MODULE_NAME" "kernelsu/$MODULE_NAME"
-          cp "out/ksud/$KSUD_NAME" "kernelsu/$KSUD_NAME"
-
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import pathlib
-          import re
-
-          root = pathlib.Path('.')
-          module = root / 'kernelsu/android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko'
-          ksud = root / 'kernelsu/ksud-s25u-kdp-v3.3.0'
-          size = ksud.stat().st_size
-          sha = hashlib.sha256(ksud.read_bytes()).hexdigest()
-          module_size = module.stat().st_size
-          module_sha = hashlib.sha256(module.read_bytes()).hexdigest()
-
-          manifest_path = root / 'support/targets-v3.json'
-          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-          target = manifest['payloads'][0]
-          target['kernelsu']['url'] = (
-              'https://raw.githubusercontent.com/igorcv88/'
-              'Root-My-Galaxy-Payloads-S938B/main/kernelsu/ksud-s25u-kdp-v3.3.0'
-          )
-          target['kernelsu']['size'] = size
-          target['kernelsu']['sha256'] = sha
-          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-
-          readme_path = root / 'kernelsu/README.md'
-          readme = readme_path.read_text(encoding='utf-8')
-          block_pattern = re.compile(
-              r'(android15-6\.6_kernelsu-s25u-kdp-v3\.3\.0\.ko\n)'
-              r'size: \d+\nSHA-256: [0-9a-f]{64}\n\n'
-              r'(ksud-s25u-kdp-v3\.3\.0\n)'
-              r'size: \d+\nSHA-256: [0-9a-f]{64}',
-          )
-          replacement = (
-              f'android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko\n'
-              f'size: {module_size}\nSHA-256: {module_sha}\n\n'
-              f'ksud-s25u-kdp-v3.3.0\n'
-              f'size: {size}\nSHA-256: {sha}'
-          )
-          readme, count = block_pattern.subn(replacement, readme, count=1)
-          if count != 1:
-              raise SystemExit('failed to update CZG3 artifact metadata block in README')
-          readme = readme.replace(
-              'Published CZG3 artifacts (stored as Git LFS objects so branch updates and reviews contain textual pointers rather than unsupported inline binary patches):',
-              'Published CZG3 artifacts (stored as ordinary Git blobs so commit-pinned raw URLs return executable bytes directly):',
-          )
-          readme_path.write_text(readme, encoding='utf-8')
-
-          print(f'MODULE_SIZE={module_size}')
-          print(f'MODULE_SHA256={module_sha}')
-          print(f'KSUD_SIZE={size}')
-          print(f'KSUD_SHA256={sha}')
-          PY
-
-          test "$(head -c 7 "kernelsu/$KSUD_NAME")" != 'version'
-          test "$(head -c 7 "kernelsu/$MODULE_NAME")" != 'version'
-          sha256sum "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME"
-          git diff --check
-
-          git config user.name "Root My Galaxy CI"
-          git config user.email "root-my-galaxy-ci@users.noreply.github.com"
-          git add .gitattributes kernelsu/README.md \
-                  "kernelsu/$MODULE_NAME" "kernelsu/$KSUD_NAME" support/targets-v3.json
-          git status --short
-          git commit -m 'Rebuild and publish CZG3 KernelSU v3.3.0 artifacts as Git blobs'
-          git push origin HEAD:repair/rebuild-kernelsu-v330-artifacts
