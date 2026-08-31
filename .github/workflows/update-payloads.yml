@@ -68,10 +68,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/KernelSU"
-          git clone "$KSU_REPO" "$RUNNER_TEMP/KernelSU"
+          git clone --filter=blob:none "$KSU_REPO" "$RUNNER_TEMP/KernelSU"
           cd "$RUNNER_TEMP/KernelSU"
           git checkout --detach "$KSU_TAG_SHA"
           test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
           python3 "$GITHUB_WORKSPACE/kernelsu/patches/apply-v330-staged-daemon-hotfix.py"
 
@@ -86,6 +87,7 @@ jobs:
             ghcr.io/ylarod/ddk-min:android15-6.6-20260828 \
             bash -lc '
               set -euo pipefail
+              git config --global --add safe.directory /work/KernelSU
               cd /work/KernelSU
               test -n "${KDIR:-}"
               test -d "$KDIR"
@@ -113,6 +115,7 @@ jobs:
           set -euo pipefail
           rustup target add aarch64-linux-android
           cd "$RUNNER_TEMP/KernelSU"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
           mkdir -p userspace/ksud/bin/aarch64
           cp "$GITHUB_WORKSPACE/kernelsu/$MODULE_NAME" \
              userspace/ksud/bin/aarch64/android15-6.6_kernelsu.ko
@@ -122,6 +125,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp "target/$TRIPLE/release/ksud" "$GITHUB_WORKSPACE/out/$KSUD_NAME"
           test -s "$GITHUB_WORKSPACE/out/$KSUD_NAME"
+          strings "$GITHUB_WORKSPACE/out/$KSUD_NAME" | grep -F '32601' | head -n 1
 
       - name: Atualizar arquivos e hashes
         run: |
