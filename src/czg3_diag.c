@@ -188,6 +188,7 @@ struct sched_snapshot {
   int error;
   int rusage_available;
   int captured;
+  int metadata_only;
 };
 
 struct system_snapshot {
@@ -260,16 +261,12 @@ static void czg3_race_prepare_shared(void) {
 void czg3_race_reset(int attempt) {
   memset(race_store, 0, sizeof(*race_store));
   race_store->race_attempt = attempt;
+  race_store->race_pid = getpid();
 }
 
 void czg3_race_record(enum czg3_race_role role, enum czg3_race_event event,
                       int64_t arg0, int64_t arg1) {
   if ((unsigned)role >= CZG3_RACE_ROLE_COUNT) return;
-  int expected_pid = 0;
-  int current_pid = getpid();
-  (void)__atomic_compare_exchange_n(&race_store->race_pid, &expected_pid,
-                                    current_pid, 0, __ATOMIC_RELAXED,
-                                    __ATOMIC_RELAXED);
   struct role_trace *trace = &race_store->traces[role];
   uint32_t slot = __atomic_load_n(&trace->count, __ATOMIC_RELAXED);
   if (slot >= RACE_RECORD_CAPACITY) {
@@ -288,11 +285,23 @@ void czg3_race_thread_snapshot(const char *phase,
 
   struct sched_snapshot snapshot;
   memset(&snapshot, 0, sizeof(snapshot));
-  snapshot.ts = now_ns(CLOCK_MONOTONIC_RAW);
   snapshot.tid = tid;
   snapshot.cpu = -1;
   snapshot.policy = -1;
 
+  /* Worker pre-snapshots execute immediately before the PI race starts.
+   * Preserve the record shape but do not issue scheduler/rusage syscalls
+   * there; the THREAD_READY event that follows carries the hot-path timing
+   * and CPU observation. Full scheduler snapshots remain available for the
+   * parent pre-snapshot and for all post-race snapshots. */
+  if (phase_id == 0 && role != CZG3_RACE_PARENT) {
+    snapshot.captured = 1;
+    snapshot.metadata_only = 1;
+    race_store->sched[phase_id][role] = snapshot;
+    return;
+  }
+
+  snapshot.ts = now_ns(CLOCK_MONOTONIC_RAW);
   int current_tid = (int)syscall(SYS_gettid);
   if (tid == current_tid) snapshot.cpu = sched_getcpu();
 
@@ -354,11 +363,12 @@ static void dump_sched_snapshot(int phase_id, enum czg3_race_role role) {
   if (!snapshot->captured) return;
   const char *phase = phase_id == 0 ? "pre" : "post";
   fprintf(stdout,
-          "RMG_SCHED_V1|run=%016llx|phase=%s|role=%s|tid=%d|cpu=%d|policy=%d|priority=-1|nice=-1|available=%d|errno=%d|affinity0=%016llx|ts_raw_ns=%llu|mode=buffered\n",
+          "RMG_SCHED_V1|run=%016llx|phase=%s|role=%s|tid=%d|cpu=%d|policy=%d|priority=-1|nice=-1|available=%d|errno=%d|affinity0=%016llx|ts_raw_ns=%llu|mode=%s\n",
           (unsigned long long)run_id, phase, race_roles[role], snapshot->tid,
           snapshot->cpu, snapshot->policy, snapshot->available, snapshot->error,
           (unsigned long long)snapshot->affinity0,
-          (unsigned long long)snapshot->ts);
+          (unsigned long long)snapshot->ts,
+          snapshot->metadata_only ? "hotpath_metadata_only" : "buffered");
 
   if (snapshot->rusage_available) {
     fprintf(stdout,
@@ -427,7 +437,7 @@ static void czg3_race_dump_now(int fallback_attempt) {
     dump_system_snapshot(phase);
   }
   fprintf(stdout,
-          "RMG_SYS_V1|run=%016llx|phase=post_fops|kind=telemetry_mode|available=1|line=buffered_shared_deferred_dump\n",
+          "RMG_SYS_V1|run=%016llx|phase=post_fops|kind=telemetry_mode|available=1|line=buffered_shared_deferred_dump_hotpath_metadata_only\n",
           (unsigned long long)run_id);
   fflush(stdout);
 }
