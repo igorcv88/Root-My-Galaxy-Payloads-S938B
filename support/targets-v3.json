@@ -4,12 +4,8 @@
     {
       "payloadId": "pa3q-S938BXXSBCZG3",
       "displayName": "Galaxy S25 Ultra SM-S938B | S938BXXSBCZG3",
-      "models": [
-        "SM-S938B"
-      ],
-      "kernelVersions": [
-        "6.6.98"
-      ],
+      "models": ["SM-S938B"],
+      "kernelVersions": ["6.6.98"],
       "exactMatch": {
         "manufacturer": "samsung",
         "model": "SM-S938B",
