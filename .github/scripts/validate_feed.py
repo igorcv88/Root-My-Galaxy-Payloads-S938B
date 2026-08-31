@@ -104,11 +104,15 @@ def main() -> None:
 
     exploit = validate_artifact(target["exploit"])
     validate_artifact(target["kernelsu"])
-    assert exploit.read_bytes() != legacy_exploit.read_bytes(), (
+    exploit_bytes = exploit.read_bytes()
+    assert exploit_bytes != legacy_exploit.read_bytes(), (
         "v2 legacy and v3 payloads unexpectedly became identical"
     )
-    assert b"RMG_RACE_V1" in exploit.read_bytes(), (
-        "canonical CZG3 v3 payload is missing race telemetry"
+    assert b"RMG_RACE_V1" not in exploit_bytes, (
+        "canonical CZG3 payload must not contain scheduler-sensitive race telemetry"
+    )
+    assert b"RMG_SYS_V1" not in exploit_bytes, (
+        "canonical CZG3 payload must not contain heavy system snapshot telemetry"
     )
 
     assert (ROOT / "src/targets/pa3q-S938BXXSBCZG3/target.h").is_file()
