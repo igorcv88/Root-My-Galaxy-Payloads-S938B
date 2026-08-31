@@ -113,16 +113,16 @@ build with `cargo clean -p ksud` followed by
 depend on an uncreated `.ksud-stage` file. The `ksud late-load` contract is
 preserved.
 
-Published CZG3 artifacts (stored as Git LFS objects so branch updates and reviews contain textual pointers rather than unsupported inline binary patches):
+Published CZG3 artifacts (stored as ordinary Git blobs so commit-pinned raw URLs return executable bytes directly):
 
 ```text
 android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
 size: 332416
-SHA-256: fa80d308aa26b895603d25ad40f0568b88c1e90332c5dfffdb50d3dc86aa2e49
+SHA-256: 57e7210056f67c408f1887b0b2e7ec25a518d7a11e526bea0dc40eebdeb7a443
 
 ksud-s25u-kdp-v3.3.0
-size: 4823128
-SHA-256: 85b550f7527be35ff8a44689cefea96e5faafd636a74ef66dda00a367deeff74
+size: 5095544
+SHA-256: cc246036a6881ee72ac52340220e64c6f6993f9c28f5fe2ea60035b4399bf503
 ```
 
 Static validation confirmed AArch64 ELF64, exact vermagic, 215 undefined symbols
