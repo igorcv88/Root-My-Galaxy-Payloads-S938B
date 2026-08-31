@@ -77,9 +77,9 @@ jobs:
         run: |
           set -euo pipefail
           make clean
-          make TARGET="$TARGET" ANDROID_NDK_HOME="$ANDROID_NDK_HOME" diagnostic
-          test -s "build/$TARGET/cve-2026-43499-app.diagnostic.so"
-          strings "build/$TARGET/cve-2026-43499-app.diagnostic.so" | grep -F 'RMG_RACE_V1'
+          make TARGET="$TARGET" ANDROID_NDK_HOME="$ANDROID_NDK_HOME" release
+          test -s "build/$TARGET/cve-2026-43499-app.release.so"
+          strings "build/$TARGET/cve-2026-43499-app.release.so" | grep -F 'RMG_RACE_V1'
 
       - name: Preparar KernelSU
         if: contains(inputs.atualizar, 'KernelSU')
@@ -183,7 +183,7 @@ jobs:
               return len(data), hashlib.sha256(data).hexdigest()
 
           if "Exploit" in mode:
-              source = root / "build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.diagnostic.so"
+              source = root / "build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.release.so"
               dest = destination(target["exploit"]["url"])
               dest.parent.mkdir(parents=True, exist_ok=True)
               shutil.copy2(source, dest)
@@ -239,7 +239,7 @@ jobs:
           git config user.name "Root My Galaxy"
           git config user.email "root-my-galaxy@users.noreply.github.com"
           git add support/targets-v3.json
-          git add artifacts/pa3q-S938BXXSBCZG3-v0267-diag/cve-2026-43499-app.so
+          git add artifacts/pa3q-S938BXXSBCZG3-v0267/cve-2026-43499-app.so
           git add kernelsu/android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
           git add kernelsu/ksud-s25u-kdp-v3.3.0
           git add kernelsu/README.md
