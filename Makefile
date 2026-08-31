@@ -40,6 +40,7 @@ APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -s
 PRELOAD_SRCS := \
   src/main.c \
   src/util.c \
+  src/czg3_diag.c \
   src/slide.c \
   src/fops.c \
   src/pipe.c \
@@ -49,6 +50,7 @@ PRELOAD_SRCS := \
 APP_PRELOAD_SRCS := \
   src/main.c \
   src/util.c \
+  src/czg3_diag.c \
   src/slide_app.c \
   src/fops.c \
   src/pipe.c \
