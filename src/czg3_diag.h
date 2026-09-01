@@ -94,17 +94,31 @@ enum czg3_race_event {
   CZG3_RACE_CONSUMER_ACTION_END
 };
 
+void czg3_race_prepare_shared(void);
 void czg3_race_reset(int attempt);
-void czg3_race_record(enum czg3_race_role role, enum czg3_race_event event,
-                      int64_t arg0, int64_t arg1);
+void czg3_race_record_impl(enum czg3_race_role role,
+                           enum czg3_race_event event,
+                           int64_t arg0, int64_t arg1);
+/*
+ * THREAD_READY used to pass sched_getcpu() as arg1.  With telemetry disabled
+ * that expression was never evaluated, so evaluating it in production changed
+ * the scheduler-sensitive path.  Keep the event but make its CPU observation
+ * explicitly deferred to the post-race scheduler snapshot.
+ */
+#define czg3_race_record(role, event, arg0, arg1)                         \
+  czg3_race_record_impl((role), (event), (arg0),                          \
+                        ((event) == CZG3_RACE_THREAD_READY ? -1 : (arg1)))
 void czg3_race_dump(void);
+void czg3_race_flush_pending(int fallback_attempt);
 void czg3_race_system_snapshot(const char *phase);
 void czg3_race_thread_snapshot(const char *phase,
                                enum czg3_race_role role, int tid);
 #else
+#define czg3_race_prepare_shared() ((void)0)
 #define czg3_race_reset(attempt) ((void)0)
 #define czg3_race_record(role, event, arg0, arg1) ((void)0)
 #define czg3_race_dump() ((void)0)
+#define czg3_race_flush_pending(attempt) ((void)0)
 #define czg3_race_system_snapshot(phase) ((void)0)
 #define czg3_race_thread_snapshot(phase, role, tid) ((void)0)
 #endif

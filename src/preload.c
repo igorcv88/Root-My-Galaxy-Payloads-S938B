@@ -75,6 +75,8 @@ void app_publish_writer_entered(void) {
 }
 
 void app_publish_writer_returned(int child_status) {
+  /* The race child is already dead when this hook is called. */
+  czg3_race_flush_pending(1);
   if (!app_p0_state) return;
   int state = atomic_load(&app_p0_state->writer_state);
   if (WIFEXITED(child_status) && state == CZG3_WRITER_ARMED) {
