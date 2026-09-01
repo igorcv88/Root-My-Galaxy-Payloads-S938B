@@ -28,39 +28,33 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          def replace_once(path, old, new):
+          def sub(path, pattern, replacement):
               p = Path(path)
               text = p.read_text()
-              count = text.count(old)
+              text, count = re.subn(pattern, replacement, text, count=1, flags=re.S | re.M)
               if count != 1:
-                  raise SystemExit(f"{path}: expected one match, got {count} for {old[:100]!r}")
-              p.write_text(text.replace(old, new, 1))
+                  raise SystemExit(f"{path}: pattern did not match exactly once: {pattern[:120]}")
+              p.write_text(text)
 
-          replace_once('Makefile',
-          '''# CZG3 has one canonical v3 payload. Race telemetry is part of that release;
-          # there is no parallel "diagnostic" payload/feed for the same firmware.
-          ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
-          APP_RELEASE_EXTRA_CFLAGS := -DCZG3_RACE_TELEMETRY=1
-          APP_RELEASE_FIXED_SIZE := 0
-          CZG3_APP_EXTRA_SRCS := src/boot_control.c
-          endif'''.replace('          ', ''),
-          '''# CZG3 keeps one canonical payload, but production observation happens from
+          sub(
+              'Makefile',
+              r'''# CZG3 has one canonical v3 payload\. Race telemetry is part of that release;\n# there is no parallel "diagnostic" payload/feed for the same firmware\.\nifeq \(\$\(TARGET\),pa3q-S938BXXSBCZG3\)\nAPP_RELEASE_EXTRA_CFLAGS := -DCZG3_RACE_TELEMETRY=1\nAPP_RELEASE_FIXED_SIZE := 0\nCZG3_APP_EXTRA_SRCS := src/boot_control\.c\nendif''',
+              '''# CZG3 keeps one canonical payload, but production observation happens from
           # the app's sibling observer process. Compile allocator/race instrumentation
           # completely out of the exploit hot path while retaining fail-closed safety.
           ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
           APP_RELEASE_EXTRA_CFLAGS := -DCZG3_EXTERNAL_OBSERVER=1
           APP_RELEASE_FIXED_SIZE := 0
           CZG3_APP_EXTRA_SRCS := src/boot_control.c
-          endif'''.replace('          ', ''))
+          endif'''.replace('          ', ''),
+          )
 
-          replace_once('src/czg3_diag.h',
-          '''void czg3_diag_start(const char *profile);
-          void czg3_diag_event(const char *stage, int attempt,
-                               enum czg3_failure failure, int cleanup_complete,
-                               const char *state);
-          void czg3_diag_checkpoint(const char *stage, int attempt);'''.replace('          ', ''),
-          '''/* External-observer production builds must not execute diagnostics inside
+          sub(
+              'src/czg3_diag.h',
+              r'''void czg3_diag_start\(const char \*profile\);\nvoid czg3_diag_event\(const char \*stage, int attempt,\n\s+enum czg3_failure failure, int cleanup_complete,\n\s+const char \*state\);\nvoid czg3_diag_checkpoint\(const char \*stage, int attempt\);''',
+              '''/* External-observer production builds must not execute diagnostics inside
            * allocator/race-sensitive code. Keep the implementation available for host
            * tests and explicit diagnostic builds, but compile call sites to no-ops. */
           #if defined(CZG3_EXTERNAL_OBSERVER) && CZG3_EXTERNAL_OBSERVER && \\
@@ -74,51 +68,31 @@ jobs:
                                enum czg3_failure failure, int cleanup_complete,
                                const char *state);
           void czg3_diag_checkpoint(const char *stage, int attempt);
-          #endif'''.replace('          ', ''))
+          #endif'''.replace('          ', ''),
+          )
 
-          validator = Path('.github/scripts/validate_feed.py')
-          text = validator.read_text()
-          old = '''    # The committed canonical artifact may intentionally lag source while a source-only
-              # PR is under review. The exploit build step in update-payloads.yml validates all
-              # release-only diagnostic markers before it overwrites this canonical file. Keep
-              # this feed validator compatible with KernelSU-only updates in that transition.
-              exploit_bytes = exploit.read_bytes()
-              for marker in (b"RMG_RACE_V1", b"RMG_SCHED_V1", b"RMG_SYS_V1"):
-                  assert marker in exploit_bytes, (
-                      f"canonical CZG3 payload is missing {marker.decode()}"
-                  )
-          '''.replace('              ', '    ')
-          new = '''    # Source-only PRs can intentionally lead the committed canonical binary.
-              # Release-mode instrumentation properties are validated against the freshly
-              # built payload in update-payloads.yml, not against a potentially lagging artifact.
-          '''.replace('              ', '    ')
-          if text.count(old) != 1:
-              raise SystemExit('validate_feed.py marker block not found exactly once')
-          validator.write_text(text.replace(old, new, 1))
+          sub(
+              '.github/scripts/validate_feed.py',
+              r'''    # The committed canonical artifact may intentionally lag source while a source-only\n    # PR is under review\. The exploit build step in update-payloads\.yml validates all\n    # release-only diagnostic markers before it overwrites this canonical file\. Keep\n    # this feed validator compatible with KernelSU-only updates in that transition\.\n    exploit_bytes = exploit\.read_bytes\(\)\n    for marker in \(b"RMG_RACE_V1", b"RMG_SCHED_V1", b"RMG_SYS_V1"\):\n        assert marker in exploit_bytes, \(\n            f"canonical CZG3 payload is missing \{marker\.decode\(\)\}"\n        \)\n''',
+              '''    # Source-only PRs can intentionally lead the committed canonical binary.
+          # Release-mode instrumentation properties are validated against the freshly
+          # built payload in update-payloads.yml, not against a potentially lagging artifact.
+          '''.replace('          ', ''),
+          )
 
-          workflow = Path('.github/workflows/update-payloads.yml')
-          text = workflow.read_text()
-          old = '''          strings "$payload" | grep -F 'RMG_RACE_V1'
-                    strings "$payload" | grep -F 'RMG_SCHED_V1'
-                    strings "$payload" | grep -F 'RMG_SYS_V1'
-                    strings "$payload" | grep -F 'RMG_PREP_V1'
-                    strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
-                    strings "$payload" | grep -F 'RMG_BOOT_V1'
-                    strings "$payload" | grep -F 'buffered_no_hotpath_io'
-                    strings "$payload" | grep -F 'buffered_shared_deferred_dump'
-          '''.replace('                    ', '          ')
-          new = '''          strings "$payload" | grep -F 'RMG_BOOT_V1'
-                    strings "$payload" | grep -F 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle'
-                    ! strings "$payload" | grep -F 'RMG_RACE_V1'
-                    ! strings "$payload" | grep -F 'RMG_SCHED_V1'
-                    ! strings "$payload" | grep -F 'RMG_SYS_V1'
-                    ! strings "$payload" | grep -F 'RMG_PREP_V1'
-                    ! strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
-                    ! strings "$payload" | grep -F 'RMG_DIAG_V1'
-          '''.replace('                    ', '          ')
-          if text.count(old) != 1:
-              raise SystemExit('update-payloads telemetry validation block not found exactly once')
-          workflow.write_text(text.replace(old, new, 1))
+          sub(
+              '.github/workflows/update-payloads.yml',
+              r'''          strings "\$payload" \| grep -F 'RMG_RACE_V1'\n          strings "\$payload" \| grep -F 'RMG_SCHED_V1'\n          strings "\$payload" \| grep -F 'RMG_SYS_V1'\n          strings "\$payload" \| grep -F 'RMG_PREP_V1'\n          strings "\$payload" \| grep -F 'RMG_PREP_CHECKPOINT_V1'\n          strings "\$payload" \| grep -F 'RMG_BOOT_V1'\n          strings "\$payload" \| grep -F 'buffered_no_hotpath_io'\n          strings "\$payload" \| grep -F 'buffered_shared_deferred_dump'\n''',
+              '''          strings "$payload" | grep -F 'RMG_BOOT_V1'
+          strings "$payload" | grep -F 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle'
+          ! strings "$payload" | grep -F 'RMG_RACE_V1'
+          ! strings "$payload" | grep -F 'RMG_SCHED_V1'
+          ! strings "$payload" | grep -F 'RMG_SYS_V1'
+          ! strings "$payload" | grep -F 'RMG_PREP_V1'
+          ! strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
+          ! strings "$payload" | grep -F 'RMG_DIAG_V1'
+''',
+          )
           PY
 
       - name: Validate host logic
