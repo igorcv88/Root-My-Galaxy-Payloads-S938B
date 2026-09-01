@@ -40,16 +40,17 @@ APP_RELEASE_OPT := -Oz
 APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s
 APP_RELEASE_EXTRA_CFLAGS :=
 APP_RELEASE_FIXED_SIZE := 1
+CZG3_APP_EXTRA_SRCS :=
 
 # CZG3 has one canonical v3 payload. Race telemetry is part of that release;
 # there is no parallel "diagnostic" payload/feed for the same firmware.
 ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
 APP_RELEASE_EXTRA_CFLAGS := -DCZG3_RACE_TELEMETRY=1
 APP_RELEASE_FIXED_SIZE := 0
+CZG3_APP_EXTRA_SRCS := src/boot_control.c
 endif
 
 PRELOAD_SRCS := \
-  src/boot_control.c \
   src/main.c \
   src/util.c \
   src/czg3_diag.c \
@@ -60,7 +61,7 @@ PRELOAD_SRCS := \
   src/preload.c
 
 APP_PRELOAD_SRCS := \
-  src/boot_control.c \
+  $(CZG3_APP_EXTRA_SRCS) \
   src/main.c \
   src/util.c \
   src/czg3_diag.c \
