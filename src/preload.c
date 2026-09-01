@@ -144,6 +144,8 @@ static int attempt_delay_usec(int base_delay, int attempt) {
   return delay < 0 ? 0 : delay;
 }
 
+#if defined(APP_PAYLOAD) && APP_PAYLOAD && \
+    defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
 static uint64_t boottime_ms(void) {
   struct timespec uptime = {0};
   SYSCHK(clock_gettime(CLOCK_BOOTTIME, &uptime));
@@ -160,7 +162,6 @@ static long long env_long_long(const char *name, long long fallback) {
 }
 
 static void wait_for_boot_quiet_window(uint64_t constructor_uptime_ms) {
-#if defined(APP_PAYLOAD) && APP_PAYLOAD
   int configured_sec = rmg_parse_boot_min_uptime_sec(
       getenv("RMG_BOOT_MIN_UPTIME_SEC"));
   uint64_t wait_started_ms = boottime_ms();
@@ -192,18 +193,24 @@ static void wait_for_boot_quiet_window(uint64_t constructor_uptime_ms) {
           (unsigned long long)(preparation_uptime_ms - wait_started_ms),
           (unsigned long long)preparation_uptime_ms,
           getenv("RMG_INVOCATION_MODE") ?: "unknown");
-#endif
 }
+#endif
 
 __attribute__((constructor)) static void load(void) {
-  uint64_t constructor_uptime_ms = boottime_ms();
   static int started;
   if (started) {
     return;
   }
+#if defined(APP_PAYLOAD) && APP_PAYLOAD && \
+    defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+  uint64_t constructor_uptime_ms = boottime_ms();
+#endif
   started = 1;
   set_unbuffer();
+#if defined(APP_PAYLOAD) && APP_PAYLOAD && \
+    defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
   wait_for_boot_quiet_window(constructor_uptime_ms);
+#endif
 
   int max_attempts = env_int(
       "EXPLOIT_ATTEMPTS", DEFAULT_EXPLOIT_ATTEMPTS, 1, 64);
