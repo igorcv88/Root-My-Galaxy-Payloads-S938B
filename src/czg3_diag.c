@@ -1,9 +1,11 @@
 #define _GNU_SOURCE
+#define CZG3_DIAG_IMPLEMENTATION 1
 #include "czg3_diag.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -28,13 +30,20 @@ struct prep_record {
   uint64_t duration_us;
   uint64_t arg0;
   uint64_t arg1;
+  size_t object_index;
+  const char *scope;
   const char *event;
   const char *result;
+  int attempt;
+  uint32_t is_total;
+  uint32_t trace_complete;
+  uint32_t dropped_events;
 };
 
 static struct prep_record prep_records[PREP_RECORD_CAPACITY];
 static uint32_t prep_record_count;
 static uint32_t prep_dropped;
+static uint32_t prep_batch_dropped_start;
 static uint64_t prep_started;
 static uint64_t prep_phase_started;
 static uint64_t prep_counter_frequency;
@@ -82,6 +91,71 @@ static uint64_t prep_delta_us(uint64_t start, uint64_t end) {
   }
 #endif
   return (end - start) / 1000ULL;
+}
+
+static struct prep_record *prep_append(const char *event,
+                                       const char *result,
+                                       uint64_t timestamp,
+                                       uint64_t duration_us,
+                                       uint64_t arg0,
+                                       uint64_t arg1) {
+  if (prep_record_count >= PREP_RECORD_CAPACITY) {
+    prep_dropped++;
+    return NULL;
+  }
+  struct prep_record *record = &prep_records[prep_record_count++];
+  *record = (struct prep_record){
+      .timestamp = timestamp,
+      .duration_us = duration_us,
+      .arg0 = arg0,
+      .arg1 = arg1,
+      .scope = prep_scope,
+      .event = event ? event : "unknown",
+      .result = result ? result : "ok",
+      .attempt = prep_attempt,
+  };
+  return record;
+}
+
+static int prep_has_total_scope(const char *scope) {
+  if (!scope) return 0;
+  for (uint32_t i = 0; i < prep_record_count; i++) {
+    const struct prep_record *record = &prep_records[i];
+    if (record->is_total && record->scope &&
+        strcmp(record->scope, scope) == 0) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void prep_dump_pending(void) {
+  if (!prep_record_count) return;
+
+  char formatted[320];
+  for (uint32_t i = 0; i < prep_record_count; i++) {
+    const struct prep_record *item = &prep_records[i];
+    int length = czg3_prep_format_record(
+        formatted, sizeof(formatted), run_id, item->attempt, item->scope,
+        item->event, item->timestamp, item->duration_us, item->result,
+        item->arg0, item->arg1);
+    if (length <= 0) continue;
+    if (item->is_total) {
+      fprintf(stdout,
+              "%s|object_index=%zu|trace_complete=%u|dropped_events=%u\n",
+              formatted, item->object_index, item->trace_complete,
+              item->dropped_events);
+    } else {
+      fprintf(stdout, "%s\n", formatted);
+    }
+  }
+  fprintf(stdout,
+          "RMG_SYS_V1|run=%016llx|phase=post_fops|kind=prep_telemetry_mode|available=1|line=buffered_deferred_post_race_cntvct\n",
+          (unsigned long long)run_id);
+  fflush(stdout);
+  prep_record_count = 0;
+  prep_dropped = 0;
+  prep_batch_dropped_start = 0;
 }
 #endif
 
@@ -199,6 +273,18 @@ void czg3_diag_event(const char *stage, int attempt,
       strcmp(stage, "PHYSICAL_RACE_RESULT") == 0) {
     czg3_race_flush_pending(attempt);
   }
+  /*
+   * A failed P0 discovery has no later FOPS race boundary on which preparation
+   * telemetry could be drained.  All P0 race children are already gone at this
+   * point, so a terminal dump is safe.  Successful production runs keep P0
+   * preparation buffered through FOPS and dump both scopes only after the FOPS
+   * child exits.  P0-only diagnostic runs likewise have no later boundary.
+   */
+  if (getpid() == diag_owner_pid && stage &&
+      strcmp(stage, "P0_DISCOVERY") == 0 &&
+      (failure != CZG3_SUCCESS || getenv("SLIDE_ONLY") || getenv("P0_ONLY"))) {
+    prep_dump_pending();
+  }
 #endif
   uint64_t now = now_ns(CLOCK_MONOTONIC);
   enum czg3_retry_safety safety = czg3_retry_policy(failure, cleanup_complete);
@@ -237,10 +323,9 @@ int czg3_prep_format_record(char *buffer, size_t size, uint64_t record_run_id,
 
 void czg3_prep_begin(const char *scope, int attempt) {
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
-  prep_record_count = 0;
-  prep_dropped = 0;
   prep_scope = scope ? scope : "unknown";
   prep_attempt = attempt;
+  prep_batch_dropped_start = prep_dropped;
 #if defined(__aarch64__)
   prep_counter_frequency = prep_read_frequency();
 #endif
@@ -248,15 +333,11 @@ void czg3_prep_begin(const char *scope, int attempt) {
   prep_phase_started = prep_started;
   struct timespec uptime = {0};
   (void)clock_gettime(CLOCK_BOOTTIME, &uptime);
-  prep_records[prep_record_count++] = (struct prep_record){
-      .timestamp = prep_started,
-      .duration_us = 0,
-      .arg0 = (uint64_t)uptime.tv_sec * 1000ULL +
-              (uint64_t)uptime.tv_nsec / 1000000ULL,
-      .arg1 = strcmp(prep_scope, "p0") == 0 ? 0 : 1,
-      .event = "preparation_begin",
-      .result = "ok",
-  };
+  (void)prep_append(
+      "preparation_begin", "ok", prep_started, 0,
+      (uint64_t)uptime.tv_sec * 1000ULL +
+          (uint64_t)uptime.tv_nsec / 1000000ULL,
+      strcmp(prep_scope, "p0") == 0 ? 0 : 1);
 #else
   (void)scope;
   (void)attempt;
@@ -276,18 +357,8 @@ void czg3_prep_phase_end(const char *event, const char *result,
                          uint64_t arg0, uint64_t arg1) {
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
   uint64_t now = prep_stamp_now();
-  if (prep_record_count >= PREP_RECORD_CAPACITY) {
-    prep_dropped++;
-    return;
-  }
-  prep_records[prep_record_count++] = (struct prep_record){
-      .timestamp = now,
-      .duration_us = prep_delta_us(prep_phase_started, now),
-      .arg0 = arg0,
-      .arg1 = arg1,
-      .event = event ? event : "unknown",
-      .result = result ? result : "ok",
-  };
+  (void)prep_append(event, result, now,
+                    prep_delta_us(prep_phase_started, now), arg0, arg1);
 #else
   (void)event;
   (void)result;
@@ -316,22 +387,21 @@ void czg3_prep_finish(const char *result, uintptr_t leaked,
                       uintptr_t base, size_t object_index) {
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
   uint64_t now = prep_stamp_now();
-  char record[320];
-  for (uint32_t i = 0; i < prep_record_count; i++) {
-    const struct prep_record *item = &prep_records[i];
-    int length = czg3_prep_format_record(
-        record, sizeof(record), run_id, prep_attempt, prep_scope, item->event,
-        item->timestamp, item->duration_us, item->result, item->arg0,
-        item->arg1);
-    if (length > 0) fprintf(stdout, "%s\n", record);
+  uint32_t before_total = prep_dropped;
+  struct prep_record *total = prep_append(
+      "total", result ? result : "unknown", now,
+      prep_delta_us(prep_started, now), leaked, base);
+  if (total) {
+    total->is_total = 1;
+    total->object_index = object_index;
+    total->trace_complete = before_total == prep_batch_dropped_start;
+    total->dropped_events = before_total - prep_batch_dropped_start;
   }
-  (void)czg3_prep_format_record(
-      record, sizeof(record), run_id, prep_attempt, prep_scope, "total", now,
-      prep_delta_us(prep_started, now), result ? result : "unknown", leaked,
-      base);
-  fprintf(stdout, "%s|object_index=%zu|trace_complete=%d|dropped_events=%u\n",
-          record, object_index, prep_dropped == 0, prep_dropped);
-  fflush(stdout);
+  /*
+   * Intentionally no stdio here.  The next physical race is allocator and
+   * scheduler sensitive.  Successful production runs are drained only from
+   * czg3_race_flush_pending() after the FOPS race child is dead.
+   */
 #else
   (void)result;
   (void)leaked;
@@ -726,12 +796,23 @@ void czg3_race_flush_pending(int fallback_attempt) {
     fprintf(stdout,
             "RMG_SYS_V1|run=%016llx|phase=post_fops|kind=telemetry_mode|available=0|line=shared_buffer_unavailable\n",
             (unsigned long long)run_id);
+    if (prep_has_total_scope("fops")) prep_dump_pending();
     return;
   }
 
   uint32_t requested = __atomic_exchange_n(&race_store->dump_requested, 0U,
                                             __ATOMIC_ACQ_REL);
-  if (!requested) return;
-  czg3_race_dump_now(fallback_attempt);
+  if (requested) {
+    czg3_race_dump_now(fallback_attempt);
+  }
+
+  /*
+   * PHYSICAL_RACE_RESULT also calls this function after each P0 child.  Do not
+   * drain preparation telemetry there.  The presence of a completed FOPS
+   * preparation proves this call is the post-FOPS child boundary, so both P0
+   * and FOPS preparation batches can now be emitted without perturbing either
+   * race.
+   */
+  if (prep_has_total_scope("fops")) prep_dump_pending();
 }
 #endif

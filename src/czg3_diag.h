@@ -60,6 +60,21 @@ void czg3_diag_event(const char *stage, int attempt,
                      enum czg3_failure failure, int cleanup_complete,
                      const char *state);
 void czg3_diag_checkpoint(const char *stage, int attempt);
+
+int czg3_prep_format_record(char *buffer, size_t size, uint64_t record_run_id,
+                            int attempt, const char *scope,
+                            const char *event, uint64_t timestamp,
+                            uint64_t duration_us, const char *result,
+                            uint64_t arg0, uint64_t arg1);
+
+/*
+ * Preparation instrumentation is CZG3-only.  Compile these calls completely
+ * out of other targets so common allocator-sensitive code does not gain a
+ * release-only call/return sequence merely because CZG3 diagnostics exist.
+ * czg3_diag.c defines CZG3_DIAG_IMPLEMENTATION while providing the symbols.
+ */
+#if (defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY) || \
+    defined(CZG3_DIAG_IMPLEMENTATION)
 void czg3_prep_begin(const char *scope, int attempt);
 void czg3_prep_phase_begin(const char *event);
 void czg3_prep_phase_end(const char *event, const char *result,
@@ -67,11 +82,32 @@ void czg3_prep_phase_end(const char *event, const char *result,
 void czg3_prep_checkpoint(const char *event);
 void czg3_prep_finish(const char *result, uintptr_t leaked,
                       uintptr_t base, size_t object_index);
-int czg3_prep_format_record(char *buffer, size_t size, uint64_t record_run_id,
-                            int attempt, const char *scope,
-                            const char *event, uint64_t timestamp,
-                            uint64_t duration_us, const char *result,
-                            uint64_t arg0, uint64_t arg1);
+#else
+static inline void czg3_prep_begin(const char *scope, int attempt) {
+  (void)scope;
+  (void)attempt;
+}
+static inline void czg3_prep_phase_begin(const char *event) {
+  (void)event;
+}
+static inline void czg3_prep_phase_end(const char *event, const char *result,
+                                       uint64_t arg0, uint64_t arg1) {
+  (void)event;
+  (void)result;
+  (void)arg0;
+  (void)arg1;
+}
+static inline void czg3_prep_checkpoint(const char *event) {
+  (void)event;
+}
+static inline void czg3_prep_finish(const char *result, uintptr_t leaked,
+                                    uintptr_t base, size_t object_index) {
+  (void)result;
+  (void)leaked;
+  (void)base;
+  (void)object_index;
+}
+#endif
 
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
 enum czg3_race_role {
