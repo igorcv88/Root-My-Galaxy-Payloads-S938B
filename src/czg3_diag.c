@@ -20,12 +20,70 @@ static uint64_t started_ns;
 static const char *profile_name = "unset";
 static pid_t diag_owner_pid;
 
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+#define PREP_RECORD_CAPACITY 64
+
+struct prep_record {
+  uint64_t timestamp;
+  uint64_t duration_us;
+  uint64_t arg0;
+  uint64_t arg1;
+  const char *event;
+  const char *result;
+};
+
+static struct prep_record prep_records[PREP_RECORD_CAPACITY];
+static uint32_t prep_record_count;
+static uint32_t prep_dropped;
+static uint64_t prep_started;
+static uint64_t prep_phase_started;
+static uint64_t prep_counter_frequency;
+static const char *prep_scope = "unknown";
+static int prep_attempt;
+#endif
+
 static uint64_t now_ns(clockid_t clock) {
   struct timespec ts = {0};
   return clock_gettime(clock, &ts) == 0
              ? (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec
              : 0;
 }
+
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+#if defined(__aarch64__)
+static inline uint64_t prep_read_counter(void) {
+  uint64_t value;
+  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(value));
+  return value;
+}
+
+static inline uint64_t prep_read_frequency(void) {
+  uint64_t value;
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
+  return value;
+}
+#endif
+
+static uint64_t prep_stamp_now(void) {
+#if defined(__aarch64__)
+  if (prep_counter_frequency) return prep_read_counter();
+#endif
+  return now_ns(CLOCK_MONOTONIC_RAW);
+}
+
+static uint64_t prep_delta_us(uint64_t start, uint64_t end) {
+  if (end < start) return 0;
+#if defined(__aarch64__)
+  if (prep_counter_frequency) {
+    uint64_t delta = end - start;
+    return (delta / prep_counter_frequency) * 1000000ULL +
+           ((delta % prep_counter_frequency) * 1000000ULL) /
+               prep_counter_frequency;
+  }
+#endif
+  return (end - start) / 1000ULL;
+}
+#endif
 
 const char *czg3_failure_name(enum czg3_failure failure) {
   static const char *const names[] = {
@@ -162,6 +220,124 @@ void czg3_diag_checkpoint(const char *stage, int attempt) {
     (void)write(fd, record, (size_t)n);
     (void)close(fd);
   }
+}
+
+int czg3_prep_format_record(char *buffer, size_t size, uint64_t record_run_id,
+                            int attempt, const char *scope,
+                            const char *event, uint64_t timestamp,
+                            uint64_t duration_us, const char *result,
+                            uint64_t arg0, uint64_t arg1) {
+  return snprintf(
+      buffer, size,
+      "RMG_PREP_V1|run=%016llx|attempt=%d|scope=%s|event=%s|ts_raw=%llu|duration_us=%llu|result=%s|arg0=%llu|arg1=%llu",
+      (unsigned long long)record_run_id, attempt, scope, event,
+      (unsigned long long)timestamp, (unsigned long long)duration_us, result,
+      (unsigned long long)arg0, (unsigned long long)arg1);
+}
+
+void czg3_prep_begin(const char *scope, int attempt) {
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+  prep_record_count = 0;
+  prep_dropped = 0;
+  prep_scope = scope ? scope : "unknown";
+  prep_attempt = attempt;
+#if defined(__aarch64__)
+  prep_counter_frequency = prep_read_frequency();
+#endif
+  prep_started = prep_stamp_now();
+  prep_phase_started = prep_started;
+  struct timespec uptime = {0};
+  (void)clock_gettime(CLOCK_BOOTTIME, &uptime);
+  prep_records[prep_record_count++] = (struct prep_record){
+      .timestamp = prep_started,
+      .duration_us = 0,
+      .arg0 = (uint64_t)uptime.tv_sec * 1000ULL +
+              (uint64_t)uptime.tv_nsec / 1000000ULL,
+      .arg1 = strcmp(prep_scope, "p0") == 0 ? 0 : 1,
+      .event = "preparation_begin",
+      .result = "ok",
+  };
+#else
+  (void)scope;
+  (void)attempt;
+#endif
+}
+
+void czg3_prep_phase_begin(const char *event) {
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+  (void)event;
+  prep_phase_started = prep_stamp_now();
+#else
+  (void)event;
+#endif
+}
+
+void czg3_prep_phase_end(const char *event, const char *result,
+                         uint64_t arg0, uint64_t arg1) {
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+  uint64_t now = prep_stamp_now();
+  if (prep_record_count >= PREP_RECORD_CAPACITY) {
+    prep_dropped++;
+    return;
+  }
+  prep_records[prep_record_count++] = (struct prep_record){
+      .timestamp = now,
+      .duration_us = prep_delta_us(prep_phase_started, now),
+      .arg0 = arg0,
+      .arg1 = arg1,
+      .event = event ? event : "unknown",
+      .result = result ? result : "ok",
+  };
+#else
+  (void)event;
+  (void)result;
+  (void)arg0;
+  (void)arg1;
+#endif
+}
+
+void czg3_prep_checkpoint(const char *event) {
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+  struct timespec uptime = {0};
+  (void)clock_gettime(CLOCK_BOOTTIME, &uptime);
+  fprintf(stdout,
+          "RMG_PREP_CHECKPOINT_V1|run=%016llx|attempt=%d|scope=%s|event=%s|uptime_ms=%llu\n",
+          (unsigned long long)run_id, prep_attempt, prep_scope,
+          event ? event : "unknown",
+          (unsigned long long)uptime.tv_sec * 1000ULL +
+              (unsigned long long)uptime.tv_nsec / 1000000ULL);
+  fflush(stdout);
+#else
+  (void)event;
+#endif
+}
+
+void czg3_prep_finish(const char *result, uintptr_t leaked,
+                      uintptr_t base, size_t object_index) {
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+  uint64_t now = prep_stamp_now();
+  char record[320];
+  for (uint32_t i = 0; i < prep_record_count; i++) {
+    const struct prep_record *item = &prep_records[i];
+    int length = czg3_prep_format_record(
+        record, sizeof(record), run_id, prep_attempt, prep_scope, item->event,
+        item->timestamp, item->duration_us, item->result, item->arg0,
+        item->arg1);
+    if (length > 0) fprintf(stdout, "%s\n", record);
+  }
+  (void)czg3_prep_format_record(
+      record, sizeof(record), run_id, prep_attempt, prep_scope, "total", now,
+      prep_delta_us(prep_started, now), result ? result : "unknown", leaked,
+      base);
+  fprintf(stdout, "%s|object_index=%zu|trace_complete=%d|dropped_events=%u\n",
+          record, object_index, prep_dropped == 0, prep_dropped);
+  fflush(stdout);
+#else
+  (void)result;
+  (void)leaked;
+  (void)base;
+  (void)object_index;
+#endif
 }
 
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY

@@ -1,6 +1,7 @@
 #ifndef CZG3_DIAG_H
 #define CZG3_DIAG_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 enum czg3_failure {
@@ -59,6 +60,18 @@ void czg3_diag_event(const char *stage, int attempt,
                      enum czg3_failure failure, int cleanup_complete,
                      const char *state);
 void czg3_diag_checkpoint(const char *stage, int attempt);
+void czg3_prep_begin(const char *scope, int attempt);
+void czg3_prep_phase_begin(const char *event);
+void czg3_prep_phase_end(const char *event, const char *result,
+                         uint64_t arg0, uint64_t arg1);
+void czg3_prep_checkpoint(const char *event);
+void czg3_prep_finish(const char *result, uintptr_t leaked,
+                      uintptr_t base, size_t object_index);
+int czg3_prep_format_record(char *buffer, size_t size, uint64_t record_run_id,
+                            int attempt, const char *scope,
+                            const char *event, uint64_t timestamp,
+                            uint64_t duration_us, const char *result,
+                            uint64_t arg0, uint64_t arg1);
 
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
 enum czg3_race_role {

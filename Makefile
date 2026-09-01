@@ -49,6 +49,7 @@ APP_RELEASE_FIXED_SIZE := 0
 endif
 
 PRELOAD_SRCS := \
+  src/boot_control.c \
   src/main.c \
   src/util.c \
   src/czg3_diag.c \
@@ -59,6 +60,7 @@ PRELOAD_SRCS := \
   src/preload.c
 
 APP_PRELOAD_SRCS := \
+  src/boot_control.c \
   src/main.c \
   src/util.c \
   src/czg3_diag.c \
@@ -94,8 +96,9 @@ COMMON_CFLAGS := \
 host-test:
 	mkdir -p build
 	$(CC) -std=c11 -Wall -Wextra -Werror -Isrc \
-	  tests/test_czg3_diag.c src/czg3_diag.c -o build/test_czg3_diag
+	  tests/test_czg3_diag.c src/czg3_diag.c src/boot_control.c -o build/test_czg3_diag
 	./build/test_czg3_diag
+	! sed -n '/void czg3_prep_begin/,/void czg3_prep_finish/p' src/czg3_diag.c | grep -F 'mmap('
 
 all: $(PRELOAD) $(APP_PRELOAD) $(ROOT_HELPER)
 

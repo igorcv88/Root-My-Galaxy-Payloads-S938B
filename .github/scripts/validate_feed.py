@@ -105,7 +105,14 @@ def main() -> None:
     assert legacy["exploit"]["size"] == target["exploit"]["size"] == exploit.stat().st_size
 
     exploit_bytes = exploit.read_bytes()
-    for marker in (b"RMG_RACE_V1", b"RMG_SCHED_V1", b"RMG_SYS_V1"):
+    for marker in (
+        b"RMG_RACE_V1",
+        b"RMG_SCHED_V1",
+        b"RMG_SYS_V1",
+        b"RMG_PREP_V1",
+        b"RMG_PREP_CHECKPOINT_V1",
+        b"RMG_BOOT_V1",
+    ):
         assert marker in exploit_bytes, (
             f"canonical CZG3 payload is missing {marker.decode()}"
         )

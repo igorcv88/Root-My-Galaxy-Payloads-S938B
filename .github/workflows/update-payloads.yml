@@ -66,6 +66,9 @@ jobs:
           strings "$payload" | grep -F 'RMG_RACE_V1'
           strings "$payload" | grep -F 'RMG_SCHED_V1'
           strings "$payload" | grep -F 'RMG_SYS_V1'
+          strings "$payload" | grep -F 'RMG_PREP_V1'
+          strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
+          strings "$payload" | grep -F 'RMG_BOOT_V1'
           strings "$payload" | grep -F 'buffered_no_hotpath_io'
           strings "$payload" | grep -F 'buffered_shared_deferred_dump'
 
