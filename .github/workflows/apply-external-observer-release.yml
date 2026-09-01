@@ -24,76 +24,8 @@ jobs:
         with:
           ndk-version: r29
 
-      - name: Patch production diagnostics mode
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          def sub(path, pattern, replacement):
-              p = Path(path)
-              text = p.read_text()
-              text, count = re.subn(pattern, replacement, text, count=1, flags=re.S | re.M)
-              if count != 1:
-                  raise SystemExit(f"{path}: pattern did not match exactly once: {pattern[:120]}")
-              p.write_text(text)
-
-          sub(
-              'Makefile',
-              r'''# CZG3 has one canonical v3 payload\. Race telemetry is part of that release;\n# there is no parallel "diagnostic" payload/feed for the same firmware\.\nifeq \(\$\(TARGET\),pa3q-S938BXXSBCZG3\)\nAPP_RELEASE_EXTRA_CFLAGS := -DCZG3_RACE_TELEMETRY=1\nAPP_RELEASE_FIXED_SIZE := 0\nCZG3_APP_EXTRA_SRCS := src/boot_control\.c\nendif''',
-              '''# CZG3 keeps one canonical payload, but production observation happens from
-          # the app's sibling observer process. Compile allocator/race instrumentation
-          # completely out of the exploit hot path while retaining fail-closed safety.
-          ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
-          APP_RELEASE_EXTRA_CFLAGS := -DCZG3_EXTERNAL_OBSERVER=1
-          APP_RELEASE_FIXED_SIZE := 0
-          CZG3_APP_EXTRA_SRCS := src/boot_control.c
-          endif'''.replace('          ', ''),
-          )
-
-          sub(
-              'src/czg3_diag.h',
-              r'''void czg3_diag_start\(const char \*profile\);\nvoid czg3_diag_event\(const char \*stage, int attempt,\n\s+enum czg3_failure failure, int cleanup_complete,\n\s+const char \*state\);\nvoid czg3_diag_checkpoint\(const char \*stage, int attempt\);''',
-              '''/* External-observer production builds must not execute diagnostics inside
-           * allocator/race-sensitive code. Keep the implementation available for host
-           * tests and explicit diagnostic builds, but compile call sites to no-ops. */
-          #if defined(CZG3_EXTERNAL_OBSERVER) && CZG3_EXTERNAL_OBSERVER && \\
-              !defined(CZG3_DIAG_IMPLEMENTATION)
-          #define czg3_diag_start(profile) ((void)0)
-          #define czg3_diag_event(stage, attempt, failure, cleanup_complete, state) ((void)0)
-          #define czg3_diag_checkpoint(stage, attempt) ((void)0)
-          #else
-          void czg3_diag_start(const char *profile);
-          void czg3_diag_event(const char *stage, int attempt,
-                               enum czg3_failure failure, int cleanup_complete,
-                               const char *state);
-          void czg3_diag_checkpoint(const char *stage, int attempt);
-          #endif'''.replace('          ', ''),
-          )
-
-          sub(
-              '.github/scripts/validate_feed.py',
-              r'''    # The committed canonical artifact may intentionally lag source while a source-only\n    # PR is under review\. The exploit build step in update-payloads\.yml validates all\n    # release-only diagnostic markers before it overwrites this canonical file\. Keep\n    # this feed validator compatible with KernelSU-only updates in that transition\.\n    exploit_bytes = exploit\.read_bytes\(\)\n    for marker in \(b"RMG_RACE_V1", b"RMG_SCHED_V1", b"RMG_SYS_V1"\):\n        assert marker in exploit_bytes, \(\n            f"canonical CZG3 payload is missing \{marker\.decode\(\)\}"\n        \)\n''',
-              '''    # Source-only PRs can intentionally lead the committed canonical binary.
-          # Release-mode instrumentation properties are validated against the freshly
-          # built payload in update-payloads.yml, not against a potentially lagging artifact.
-          '''.replace('          ', ''),
-          )
-
-          sub(
-              '.github/workflows/update-payloads.yml',
-              r'''          strings "\$payload" \| grep -F 'RMG_RACE_V1'\n          strings "\$payload" \| grep -F 'RMG_SCHED_V1'\n          strings "\$payload" \| grep -F 'RMG_SYS_V1'\n          strings "\$payload" \| grep -F 'RMG_PREP_V1'\n          strings "\$payload" \| grep -F 'RMG_PREP_CHECKPOINT_V1'\n          strings "\$payload" \| grep -F 'RMG_BOOT_V1'\n          strings "\$payload" \| grep -F 'buffered_no_hotpath_io'\n          strings "\$payload" \| grep -F 'buffered_shared_deferred_dump'\n''',
-              '''          strings "$payload" | grep -F 'RMG_BOOT_V1'
-          strings "$payload" | grep -F 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle'
-          ! strings "$payload" | grep -F 'RMG_RACE_V1'
-          ! strings "$payload" | grep -F 'RMG_SCHED_V1'
-          ! strings "$payload" | grep -F 'RMG_SYS_V1'
-          ! strings "$payload" | grep -F 'RMG_PREP_V1'
-          ! strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
-          ! strings "$payload" | grep -F 'RMG_DIAG_V1'
-''',
-          )
-          PY
+      - name: Apply external observer release patch
+        run: python3 .github/scripts/apply_external_observer_release.py
 
       - name: Validate host logic
         run: make host-test
@@ -117,13 +49,14 @@ jobs:
           ! strings "$payload" | grep -F 'RMG_DIAG_V1'
           git diff --check
 
-      - name: Commit implementation and remove helper workflow
+      - name: Commit validated implementation
         run: |
           set -euo pipefail
           git config user.name "Root My Galaxy"
           git config user.email "root-my-galaxy@users.noreply.github.com"
           rm .github/workflows/apply-external-observer-release.yml
-          git add Makefile src/czg3_diag.h .github/scripts/validate_feed.py .github/workflows/update-payloads.yml .github/workflows/apply-external-observer-release.yml
+          rm .github/scripts/apply_external_observer_release.py
+          git add Makefile src/czg3_diag.h .github/scripts/validate_feed.py .github/workflows/update-payloads.yml .github/workflows/apply-external-observer-release.yml .github/scripts/apply_external_observer_release.py
           git diff --check
           git commit -m "Move CZG3 diagnostics out of the exploit hot path"
           git push origin HEAD:feat/czg3-external-observer-v2
