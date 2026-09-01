@@ -57,6 +57,46 @@ void czg3_diag_checkpoint(const char *stage, int attempt);
 )
 
 replace_once(
+    "src/czg3_diag.c",
+    '''static uint64_t run_id;
+static uint64_t started_ns;
+static const char *profile_name = "unset";
+static pid_t diag_owner_pid;
+''',
+    '''#if !defined(CZG3_EXTERNAL_OBSERVER) || !CZG3_EXTERNAL_OBSERVER
+static uint64_t run_id;
+static uint64_t started_ns;
+static const char *profile_name = "unset";
+static pid_t diag_owner_pid;
+''',
+)
+replace_once(
+    "src/czg3_diag.c",
+    '''#endif
+
+const char *czg3_failure_name(enum czg3_failure failure) {''',
+    '''#endif
+#endif /* !CZG3_EXTERNAL_OBSERVER */
+
+const char *czg3_failure_name(enum czg3_failure failure) {''',
+)
+replace_once(
+    "src/czg3_diag.c",
+    '''void czg3_diag_start(const char *profile) {''',
+    '''#if !defined(CZG3_EXTERNAL_OBSERVER) || !CZG3_EXTERNAL_OBSERVER
+void czg3_diag_start(const char *profile) {''',
+)
+replace_once(
+    "src/czg3_diag.c",
+    '''#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+#define RACE_RECORD_CAPACITY 64''',
+    '''#endif /* !CZG3_EXTERNAL_OBSERVER */
+
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+#define RACE_RECORD_CAPACITY 64''',
+)
+
+replace_once(
     ".github/scripts/validate_feed.py",
     '''    # The committed canonical artifact may intentionally lag source while a source-only
     # PR is under review. The exploit build step in update-payloads.yml validates all
@@ -74,24 +114,6 @@ replace_once(
 ''',
 )
 
-replace_once(
-    ".github/workflows/update-payloads.yml",
-    '''          strings "$payload" | grep -F 'RMG_RACE_V1'
-          strings "$payload" | grep -F 'RMG_SCHED_V1'
-          strings "$payload" | grep -F 'RMG_SYS_V1'
-          strings "$payload" | grep -F 'RMG_PREP_V1'
-          strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
-          strings "$payload" | grep -F 'RMG_BOOT_V1'
-          strings "$payload" | grep -F 'buffered_no_hotpath_io'
-          strings "$payload" | grep -F 'buffered_shared_deferred_dump'
-''',
-    '''          strings "$payload" | grep -F 'RMG_BOOT_V1'
-          strings "$payload" | grep -F 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle'
-          ! strings "$payload" | grep -F 'RMG_RACE_V1'
-          ! strings "$payload" | grep -F 'RMG_SCHED_V1'
-          ! strings "$payload" | grep -F 'RMG_SYS_V1'
-          ! strings "$payload" | grep -F 'RMG_PREP_V1'
-          ! strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
-          ! strings "$payload" | grep -F 'RMG_DIAG_V1'
-''',
-)
+# The real update-payloads.yml is updated through the GitHub connector after
+# this source-only commit passes validation; the Actions token intentionally
+# cannot push workflow changes.
