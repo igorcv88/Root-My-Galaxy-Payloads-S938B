@@ -41,22 +41,20 @@ jobs:
           test -s "$payload"
           strings "$payload" | grep -F 'RMG_BOOT_V1'
           strings "$payload" | grep -F 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle'
-          ! strings "$payload" | grep -F 'RMG_RACE_V1'
-          ! strings "$payload" | grep -F 'RMG_SCHED_V1'
-          ! strings "$payload" | grep -F 'RMG_SYS_V1'
-          ! strings "$payload" | grep -F 'RMG_PREP_V1'
-          ! strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
-          ! strings "$payload" | grep -F 'RMG_DIAG_V1'
+          for marker in RMG_RACE_V1 RMG_SCHED_V1 RMG_SYS_V1 RMG_PREP_V1 RMG_PREP_CHECKPOINT_V1 RMG_DIAG_V1; do
+            if strings "$payload" | grep -Fq "$marker"; then
+              echo "Unexpected in-band diagnostic marker in production payload: $marker" >&2
+              exit 1
+            fi
+          done
           git diff --check
 
-      - name: Commit validated implementation
+      - name: Commit validated source implementation
         run: |
           set -euo pipefail
           git config user.name "Root My Galaxy"
           git config user.email "root-my-galaxy@users.noreply.github.com"
-          rm .github/workflows/apply-external-observer-release.yml
-          rm .github/scripts/apply_external_observer_release.py
-          git add Makefile src/czg3_diag.h .github/scripts/validate_feed.py .github/workflows/update-payloads.yml .github/workflows/apply-external-observer-release.yml .github/scripts/apply_external_observer_release.py
-          git diff --check
+          git add Makefile src/czg3_diag.h src/czg3_diag.c .github/scripts/validate_feed.py
+          git diff --cached --check
           git commit -m "Move CZG3 diagnostics out of the exploit hot path"
           git push origin HEAD:feat/czg3-external-observer-v2
