@@ -55,11 +55,23 @@ void czg3_timing_init(struct czg3_timing *timing, int baseline,
                       int minimum, int maximum);
 int czg3_timing_clean_miss(struct czg3_timing *timing, int direction);
 void czg3_timing_ambiguous(struct czg3_timing *timing);
+/*
+ * Production CZG3 observation lives in the app's sibling observer process.
+ * Compile diagnostic call sites out of allocator/race-sensitive code while
+ * retaining the implementation for host tests and explicit diagnostic builds.
+ */
+#if defined(CZG3_EXTERNAL_OBSERVER) && CZG3_EXTERNAL_OBSERVER && \
+    !defined(CZG3_DIAG_IMPLEMENTATION)
+#define czg3_diag_start(profile) ((void)0)
+#define czg3_diag_event(stage, attempt, failure, cleanup_complete, state) ((void)0)
+#define czg3_diag_checkpoint(stage, attempt) ((void)0)
+#else
 void czg3_diag_start(const char *profile);
 void czg3_diag_event(const char *stage, int attempt,
                      enum czg3_failure failure, int cleanup_complete,
                      const char *state);
 void czg3_diag_checkpoint(const char *stage, int attempt);
+#endif
 
 int czg3_prep_format_record(char *buffer, size_t size, uint64_t record_run_id,
                             int attempt, const char *scope,

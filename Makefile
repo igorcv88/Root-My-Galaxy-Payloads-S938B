@@ -42,10 +42,11 @@ APP_RELEASE_EXTRA_CFLAGS :=
 APP_RELEASE_FIXED_SIZE := 1
 CZG3_APP_EXTRA_SRCS :=
 
-# CZG3 has one canonical v3 payload. Race telemetry is part of that release;
-# there is no parallel "diagnostic" payload/feed for the same firmware.
+# CZG3 keeps one canonical payload, but production observation happens from
+# the app's sibling observer process. Compile allocator/race instrumentation
+# completely out of the exploit hot path while retaining fail-closed safety.
 ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
-APP_RELEASE_EXTRA_CFLAGS := -DCZG3_RACE_TELEMETRY=1
+APP_RELEASE_EXTRA_CFLAGS := -DCZG3_EXTERNAL_OBSERVER=1
 APP_RELEASE_FIXED_SIZE := 0
 CZG3_APP_EXTRA_SRCS := src/boot_control.c
 endif
