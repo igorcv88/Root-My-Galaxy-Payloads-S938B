@@ -17,6 +17,7 @@
 #include <sys/syscall.h>
 #endif
 
+#if !defined(CZG3_EXTERNAL_OBSERVER) || !CZG3_EXTERNAL_OBSERVER
 static uint64_t run_id;
 static uint64_t started_ns;
 static const char *profile_name = "unset";
@@ -158,6 +159,7 @@ static void prep_dump_pending(void) {
   prep_batch_dropped_start = 0;
 }
 #endif
+#endif /* !CZG3_EXTERNAL_OBSERVER */
 
 const char *czg3_failure_name(enum czg3_failure failure) {
   static const char *const names[] = {
@@ -235,6 +237,7 @@ void czg3_timing_ambiguous(struct czg3_timing *t) {
   t->clean_misses = 0;
 }
 
+#if !defined(CZG3_EXTERNAL_OBSERVER) || !CZG3_EXTERNAL_OBSERVER
 void czg3_diag_start(const char *profile) {
   started_ns = now_ns(CLOCK_MONOTONIC);
   run_id = (started_ns << 16) ^ (uint64_t)getpid();
@@ -409,6 +412,8 @@ void czg3_prep_finish(const char *result, uintptr_t leaked,
   (void)object_index;
 #endif
 }
+
+#endif /* !CZG3_EXTERNAL_OBSERVER */
 
 #if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
 #define RACE_RECORD_CAPACITY 64

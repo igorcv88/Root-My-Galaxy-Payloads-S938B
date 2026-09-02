@@ -63,14 +63,14 @@ jobs:
           make TARGET="$TARGET" ANDROID_NDK_HOME="$ANDROID_NDK_HOME" release
           payload="build/$TARGET/cve-2026-43499-app.release.so"
           test -s "$payload"
-          strings "$payload" | grep -F 'RMG_RACE_V1'
-          strings "$payload" | grep -F 'RMG_SCHED_V1'
-          strings "$payload" | grep -F 'RMG_SYS_V1'
-          strings "$payload" | grep -F 'RMG_PREP_V1'
-          strings "$payload" | grep -F 'RMG_PREP_CHECKPOINT_V1'
-          strings "$payload" | grep -F 'RMG_BOOT_V1'
-          strings "$payload" | grep -F 'buffered_no_hotpath_io'
-          strings "$payload" | grep -F 'buffered_shared_deferred_dump'
+          grep -aFq 'RMG_BOOT_V1' "$payload"
+          grep -aFq 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle' "$payload"
+          for marker in RMG_RACE_V1 RMG_SCHED_V1 RMG_SYS_V1 RMG_PREP_V1 RMG_PREP_CHECKPOINT_V1 RMG_DIAG_V1; do
+            if grep -aFq "$marker" "$payload"; then
+              echo "Unexpected in-band diagnostic marker in production payload: $marker" >&2
+              exit 1
+            fi
+          done
 
       - name: Preparar KernelSU
         if: contains(inputs.atualizar, 'KernelSU')

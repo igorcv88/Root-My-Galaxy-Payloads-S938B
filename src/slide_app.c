@@ -2287,7 +2287,7 @@ static int slide_trigger_physical_slot(size_t slot) {
     slide_route_syscall_pad = 0;
     snprintf(delay_arg, sizeof(delay_arg), "%d", delay);
     SYSCHK(setenv("SLIDE_ENTER_DELAY_USEC", delay_arg, 1));
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+#if CZG3_INBAND_DIAGNOSTICS
     char race_state[192];
     snprintf(race_state, sizeof(race_state),
              "slot=%zu,delay_us=%d,nfds=%d,pad=%d,waiter_ready=%d,waiter_waiting=%d,owner_started=%d,consumer_ready=%d",
@@ -2302,16 +2302,18 @@ static int slide_trigger_physical_slot(size_t slot) {
               "pad=%d\n",
               slot, attempt, attempts, delay, slide_route_nfds,
               slide_route_syscall_pad);
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+#if CZG3_INBAND_DIAGNOSTICS
       czg3_diag_event("PHYSICAL_RACE_RESULT", attempt, CZG3_SUCCESS, 1,
                       race_state);
 #endif
       return 1;
     }
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
-    /* The route cannot prove PI-tree restoration after a failed child. */
+#if CZG3_INBAND_DIAGNOSTICS
     czg3_diag_event("PHYSICAL_RACE_RESULT", attempt,
                     CZG3_RACE_STATE_UNCERTAIN, 0, race_state);
+#endif
+#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+    /* The route cannot prove PI-tree restoration after a failed child. */
     break;
 #endif
   }
@@ -3057,7 +3059,7 @@ int slide_leak_kernel_base(void) {
   }
 #endif
   for (int attempt = 1; attempt <= max_attempts; attempt++) {
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+#if CZG3_INBAND_DIAGNOSTICS
     char diag_state[192];
     snprintf(diag_state, sizeof(diag_state),
              "p0=%s,waiter_ready=%d,waiter_waiting=%d,owner_started=%d,consumer_ready=%d,pselect=route_marker",
@@ -3132,11 +3134,13 @@ int slide_leak_kernel_base(void) {
         WEXITSTATUS(status) != 0 || !stext) {
       pr_warning("slide attempt %d failed n=%zd status=%d\n",
                  attempt, n, status);
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
-      /* A child exit does not prove that a kernel PI waiter was removed. */
+#if CZG3_INBAND_DIAGNOSTICS
       czg3_diag_event("P0_RACE_RESULT", attempt,
                       CZG3_RACE_STATE_UNCERTAIN, 0,
                       "child_failed,kernel_cleanup_unproven");
+#endif
+#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
+      /* A child exit does not prove that a kernel PI waiter was removed. */
       break;
 #endif
       continue;
