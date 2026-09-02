@@ -60,6 +60,13 @@ void czg3_timing_ambiguous(struct czg3_timing *timing);
  * Compile diagnostic call sites out of allocator/race-sensitive code while
  * retaining the implementation for host tests and explicit diagnostic builds.
  */
+#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS && \
+    (!defined(CZG3_EXTERNAL_OBSERVER) || !CZG3_EXTERNAL_OBSERVER)
+#define CZG3_INBAND_DIAGNOSTICS 1
+#else
+#define CZG3_INBAND_DIAGNOSTICS 0
+#endif
+
 #if defined(CZG3_EXTERNAL_OBSERVER) && CZG3_EXTERNAL_OBSERVER && \
     !defined(CZG3_DIAG_IMPLEMENTATION)
 #define czg3_diag_start(profile) ((void)0)
