@@ -1,0 +1,40 @@
+name: Verify CZG3 timing branch
+
+on:
+  push:
+    branches:
+      - diag/czg3-fops-timestamps
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Prepare Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r29
+      - name: Host tests
+        run: make host-test
+      - name: Build canonical CZG3 release payload
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          make clean
+          make TARGET=pa3q-S938BXXSBCZG3 ANDROID_NDK_HOME="$ANDROID_NDK_HOME" release
+          payload=build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.release.so
+          test -s "$payload"
+          grep -aFq 'RMG_RACE_LIGHT_V1' "$payload"
+          for marker in RMG_RACE_V1 RMG_SCHED_V1 RMG_SYS_V1 RMG_PREP_V1 RMG_PREP_CHECKPOINT_V1 RMG_DIAG_V1; do
+            if grep -aFq "$marker" "$payload"; then
+              echo "Unexpected legacy in-band diagnostic marker: $marker" >&2
+              exit 1
+            fi
+          done
+          stat -c 'payload_size=%s' "$payload"
