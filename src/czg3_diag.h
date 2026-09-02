@@ -210,8 +210,9 @@ enum czg3_light_race_slot {
   CZG3_LIGHT_SLOT_COUNT
 };
 
-static atomic_uint_fast64_t czg3_light_race_ticks[CZG3_LIGHT_SLOT_COUNT];
-static atomic_int czg3_light_race_attempt;
+static atomic_uint_fast64_t czg3_light_race_ticks[CZG3_LIGHT_SLOT_COUNT]
+    __attribute__((unused));
+static atomic_int czg3_light_race_attempt __attribute__((unused));
 
 static inline uint64_t czg3_light_read_counter(void) {
   uint64_t value;
@@ -269,7 +270,7 @@ static inline void czg3_light_race_record(enum czg3_race_event event) {
 static inline long long czg3_light_delta_us(uint64_t first, uint64_t last,
                                              uint64_t frequency) {
   if (!first || !last || !frequency) {
-    return -1;
+    return (long long)INT64_MIN;
   }
   int64_t ticks = (int64_t)last - (int64_t)first;
   return (long long)((ticks * 1000000LL) / (int64_t)frequency);
