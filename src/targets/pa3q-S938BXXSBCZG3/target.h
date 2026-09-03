@@ -23,6 +23,7 @@
  * reclaim at that safe boundary; later stages remain fail-closed. */
 #define APP_CZG3_CACHE_GATE_RECLAIM_RETRY 1
 #define PIPE_MAX_ATTEMPTS 2
+#define APP_FOPS_ROUTE_COARSE_DELAY_USEC 60000
 #endif
 #define P0_PAGE_OFFSET 0xffffff8000000000ULL
 #define P0_PHYS_OFFSET 0x80000000ULL
