@@ -25,8 +25,8 @@
       },
       "exploit": {
         "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-S938B/main/artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so",
-        "size": 101512,
-        "sha256": "128abb0822d3c149db4944a1201cef5602112f60a07276e0908b099775ccb471"
+        "size": 101464,
+        "sha256": "c9f82ff3a7bf354924312875ea307d98e696827d539fa98b7e3e165a3b8e0317"
       },
       "kernelsu": {
         "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-S938B/main/kernelsu/ksud-s25u-kdp-v3.3.0",
