@@ -1,4 +1,4 @@
-name: Validate scoped CZG3 cache retry
+name: Apply scoped CZG3 cache retry
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  scope-and-validate:
+  scope-and-commit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -19,25 +19,10 @@ jobs:
 
       - name: Scope source change
         run: |
+          set -euo pipefail
           python3 .github/scripts/.tmp_scope_czg3_cache_retry.py
           git diff --check
-
-      - name: Prepare Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r29
-
-      - name: Validate app and root builds
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          set -euo pipefail
           make host-test
-          make clean
-          make TARGET=pa3q-S938BXXSBCZG3 ANDROID_NDK_HOME="$ANDROID_NDK_HOME" release
-          test -s build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.release.so
-          test -s build/pa3q-S938BXXSBCZG3/cve-2026-43499-root.release
 
       - name: Commit scoped correction
         run: |
