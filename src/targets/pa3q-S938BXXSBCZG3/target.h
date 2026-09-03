@@ -17,6 +17,10 @@
 
 #define KIMAGE_TEXT_BASE 0xffffffc080000000ULL
 #define APP_CZG3_DIAGNOSTICS 1
+/* Two independent CZG3 boots reached verified FOPS but missed the
+ * pipe slab cache gate before physrw began. Permit exactly one fresh
+ * reclaim at that safe boundary; later stages remain fail-closed. */
+#define PIPE_MAX_ATTEMPTS 2
 #define P0_PAGE_OFFSET 0xffffff8000000000ULL
 #define P0_PHYS_OFFSET 0x80000000ULL
 #define P0_KERNEL_PHYS_LOAD 0xa8000000ULL
