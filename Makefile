@@ -41,6 +41,7 @@ APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s
 APP_RELEASE_EXTRA_CFLAGS :=
 APP_RELEASE_FIXED_SIZE := 1
 CZG3_APP_EXTRA_SRCS :=
+CZG3_RELEASE_EXTRA_SRCS :=
 
 # CZG3 keeps one canonical payload, but production observation happens from
 # the app's sibling observer process. Compile allocator/race instrumentation
@@ -48,7 +49,8 @@ CZG3_APP_EXTRA_SRCS :=
 ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
 APP_RELEASE_EXTRA_CFLAGS := -DCZG3_EXTERNAL_OBSERVER=1
 APP_RELEASE_FIXED_SIZE := 0
-CZG3_APP_EXTRA_SRCS := src/boot_control.c src/czg3_pselect_state_gate.c
+CZG3_APP_EXTRA_SRCS := src/boot_control.c
+CZG3_RELEASE_EXTRA_SRCS := src/czg3_pselect_state_gate.c
 # The state-gate experiment is release-only and target-local.  Interpose the
 # existing route delay and sched_setattr trigger without changing slide_app.c
 # or enabling APP_REQUIRE_FRESH_P0_SESSION.
@@ -126,14 +128,14 @@ $(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h s
 	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_TARGET_CFLAGS) -fPIC $(COMMON_CFLAGS) $(APP_PRELOAD_SRCS) \
 	  -shared -pthread -Wl,--no-undefined -o $@
 
-$(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
+$(APP_RELEASE): $(CZG3_RELEASE_EXTRA_SRCS) $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_RELEASE_EXTRA_CFLAGS) $(APP_TARGET_CFLAGS) -fPIC $(APP_RELEASE_OPT) -g0 \
 	  -fno-unwind-tables -fno-asynchronous-unwind-tables \
 	  -ffunction-sections -fdata-sections \
 	  -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare \
 	  -Isrc -DTARGET_HEADER='"$(TARGET_INCLUDE)"' \
 	  $(TARGET_CFLAGS) \
-	  $(APP_PRELOAD_SRCS) -shared -pthread \
+	  $(CZG3_RELEASE_EXTRA_SRCS) $(APP_PRELOAD_SRCS) -shared -pthread \
 	  $(APP_RELEASE_LINK_FLAGS) -o $@
 	@if [ "$(APP_RELEASE_FIXED_SIZE)" = "1" ]; then \
 	  test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE); \
