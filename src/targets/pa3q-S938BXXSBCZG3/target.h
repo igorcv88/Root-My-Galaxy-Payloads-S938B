@@ -24,6 +24,15 @@
 #define APP_CZG3_CACHE_GATE_RECLAIM_RETRY 1
 #define PIPE_MAX_ATTEMPTS 2
 #define APP_FOPS_ROUTE_COARSE_DELAY_USEC 60000
+/* Confirm the waiter is actually blocked in pselect/do_select before the
+ * existing 60 ms consume delay, then confirm it is still blocked immediately
+ * before sched_setattr. This keeps the timing experiment isolated while
+ * replacing blind phase assumptions with an observed-state gate. */
+#define SLIDE_SYNC_PSELECT_SYSCALL 1
+#define SLIDE_GUARD_PSELECT_SYSCALL 1
+#define SLIDE_PSELECT_READY_TIMEOUT_USEC 20000
+#define SLIDE_PSELECT_RECHECK_TIMEOUT_USEC 20000
+#define SLIDE_PSELECT_WCHAN_CONFIRMATIONS 3
 #endif
 #define P0_PAGE_OFFSET 0xffffff8000000000ULL
 #define P0_PHYS_OFFSET 0x80000000ULL
