@@ -6,14 +6,15 @@
  * CZG3 currently uses the generic pselect route rather than the
  * APP_REQUIRE_FRESH_P0_SESSION route that owns the upstream in-line state
  * gate. Keep this experiment target-local and FOPS-only: interpose the
- * established FOPS route delay and sched_setattr call without changing the
- * P0 race, session model, offsets, or layout.
+ * effective FOPS route delay and sched_setattr call without changing the P0
+ * race, session model, offsets, or layout.
  *
  * The delay interposer first confirms that one sibling is actually blocked in
- * pselect6/do_select, then executes the existing 60 ms FOPS delay unchanged.
- * The sched_setattr interposer re-checks that exact TID immediately before
- * allowing the real trigger. Failure is fail-closed: sched_setattr is never
- * called when either state check fails.
+ * pselect6/do_select, then executes the already-selected FOPS delay unchanged
+ * (60 ms by default, or an explicit supported override). The sched_setattr
+ * interposer re-checks that exact TID immediately before allowing the real
+ * trigger. Failure is fail-closed: sched_setattr is never called when either
+ * state check fails.
  */
 
 extern int __real_usleep(useconds_t usec);
@@ -258,12 +259,14 @@ static int gate_wait_for_exact_pselect(int tid, size_t timeout_usec,
 }
 
 static int gate_matches_fops_route(useconds_t usec) {
-  if (usec != (useconds_t)APP_FOPS_ROUTE_COARSE_DELAY_USEC ||
-      slide_oracle_parent != fake_fops ||
+  if (slide_oracle_parent != fake_fops ||
       slide_oracle_target != data_addr(ASHMEM_MISC_FOPS)) {
     return 0;
   }
 
+  /* Match the effective delay selected by app_trigger_fops_slide_slot(), not
+   * only the target default. This keeps supported STACK_WRITER_DELAY_USEC
+   * overrides behind the same state gate instead of creating a bypass. */
   const char *text = getenv("SLIDE_ENTER_DELAY_USEC");
   if (!text || !*text) {
     return 0;
@@ -293,7 +296,7 @@ int __wrap_usleep(useconds_t usec) {
     gate_ctx.ready_confirmed_ns = gate_now_ns();
   }
 
-  /* Preserve the established 60 ms FOPS delay even if readiness was not
+  /* Preserve the already-selected FOPS delay even if readiness was not
    * confirmed. The following sched_setattr wrapper will refuse mutation. */
   return __real_usleep(usec);
 }
@@ -342,7 +345,7 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
 __attribute__((constructor)) static void czg3_state_gate_banner(void) {
   if (atomic_exchange(&gate_banner_printed, 1) == 0) {
     pr_info("CZG3 FOPS pselect state gate enabled ready_timeout_us=%d "
-            "recheck_timeout_us=%d confirmations=%d fops_delay_us=%d\n",
+            "recheck_timeout_us=%d confirmations=%d default_fops_delay_us=%d\n",
             APP_CZG3_PSELECT_READY_TIMEOUT_USEC,
             APP_CZG3_PSELECT_RECHECK_TIMEOUT_USEC,
             APP_CZG3_PSELECT_WCHAN_CONFIRMATIONS,
