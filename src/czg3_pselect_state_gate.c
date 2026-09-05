@@ -1,4 +1,5 @@
 #include "common.h"
+#include "czg3_auto_sigreturn.h"
 #include "czg3_diag.h"
 
 #if defined(APP_CZG3_PSELECT_STATE_GATE) && APP_CZG3_PSELECT_STATE_GATE
@@ -13,12 +14,11 @@
  *
  * v2 reuses the existing production RMG_RACE_LIGHT_V1 state that slide_app.c
  * already records with CNTVCT_EL0 + relaxed atomic stores to anchor timing at
- * PSELECT_ENTER. Immediately before mutation it performs one exact-TID syscall
- * read to close the marker-before-entry / marker-after-exit gaps; there is no
- * task enumeration, wchan read, confirmation loop, or success-path logging.
- * A zero-delay route remains refused fail-closed because it has no positive
- * separation between the pre-syscall marker and the requested trigger. P0 is
- * outside this interposer because light race state is enabled only for FOPS.
+ * PSELECT_ENTER. Manual/P0 still require one exact-TID syscall read immediately
+ * before mutation. Auto Root may instead use the target-local sigreturn proxy;
+ * in that mode an exact-TID frame-ready handshake replaces the live pselect
+ * assertion because the waiter deliberately remains in userspace after
+ * rt_sigreturn so no later waiter-thread syscall overwrites the stack residue.
  */
 
 extern int __real_usleep(useconds_t usec);
@@ -35,7 +35,8 @@ enum gate_failure {
   GATE_NO_PSELECT_ENTER,
   GATE_PSELECT_RETURNED,
   GATE_TRIGGER_LATE,
-  GATE_NOT_IN_PSELECT
+  GATE_NOT_IN_PSELECT,
+  GATE_SIGFRAME_NOT_READY,
 };
 
 struct czg3_pselect_gate_ctx {
@@ -68,6 +69,8 @@ static const char *gate_failure_name(enum gate_failure failure) {
       return "trigger-late";
     case GATE_NOT_IN_PSELECT:
       return "not-in-pselect";
+    case GATE_SIGFRAME_NOT_READY:
+      return "sigframe-not-ready";
     default:
       return "unknown";
   }
@@ -299,6 +302,9 @@ static long gate_skip_trigger(int tid, const char *reason) {
           (unsigned long long)enter,
           (unsigned long long)returned,
           gate_ctx.live_syscall_nr, tid);
+  if (czg3_auto_sigreturn_proxy_active_for_tid(tid)) {
+    czg3_auto_sigreturn_sched_complete(tid, -1, EAGAIN);
+  }
   memset(&gate_ctx, 0, sizeof(gate_ctx));
   errno = EAGAIN;
   return -1;
@@ -318,10 +324,10 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
     return gate_skip_trigger(tid, "bad-delay-metadata");
   }
 
-  /* PSELECT_ENTER is emitted immediately before SYS_pselect6. With no positive
-   * separation, a preemption between marker and syscall cannot be excluded.
-   * Reject zero rather than silently turning a timing marker into an unsafe
-   * active-state assertion. */
+  /* PSELECT_ENTER is emitted immediately before the writer syscall/proxy. With
+   * no positive separation, a preemption between marker and entry cannot be
+   * excluded. Reject zero rather than silently turning a timing marker into an
+   * unsafe active-state assertion. */
   if (effective_delay == 0) {
     memset(&gate_ctx, 0, sizeof(gate_ctx));
     gate_ctx.active = 1;
@@ -371,9 +377,32 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
     return gate_skip_trigger(tid, "trigger-late");
   }
 
-  /* One exact-TID live check closes both marker gaps without bringing back the
-   * v1 sibling scan/wchan/confirmation loops. If access is denied or the TID is
-   * no longer executing pselect6, refuse mutation. */
+  /* Auto Root deliberately has no live pselect syscall at this point. The
+   * sigreturn proxy proves the exact waiter TID and frame readiness instead,
+   * then atomically hands ownership to this trigger before sched_setattr can
+   * enter. Manual/P0 continue through the original exact-TID syscall check. */
+  if (czg3_auto_sigreturn_proxy_active_for_tid(tid)) {
+    if (!czg3_auto_sigreturn_frame_ready_for_tid(tid)) {
+      gate_ctx.failure = GATE_SIGFRAME_NOT_READY;
+      return gate_skip_trigger(tid, "autoroot-sigframe-not-ready");
+    }
+    if (!czg3_auto_sigreturn_sched_started(tid)) {
+      gate_ctx.failure = GATE_SIGFRAME_NOT_READY;
+      return gate_skip_trigger(tid, "autoroot-sigframe-handoff-lost");
+    }
+
+    memset(&gate_ctx, 0, sizeof(gate_ctx));
+    errno = 0;
+    long ret = __real_sched_setattr_tid(tid, nice_value);
+    int saved_errno = errno;
+    czg3_auto_sigreturn_sched_complete(tid, ret, saved_errno);
+    errno = saved_errno;
+    return ret;
+  }
+
+  /* Manual/P0: one exact-TID live check closes both marker gaps without
+   * bringing back the v1 sibling scan/wchan/confirmation loops. If access is
+   * denied or the TID is no longer executing pselect6, refuse mutation. */
   gate_ctx.live_syscall_nr = gate_read_task_syscall_nr(tid);
   if (gate_ctx.live_syscall_nr != SYS_pselect6) {
     gate_ctx.failure = GATE_NOT_IN_PSELECT;
@@ -399,7 +428,7 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
     return gate_skip_trigger(tid, "live-check-made-trigger-late");
   }
 
-  /* No successful-path logging. RMG_RACE_LIGHT_V1 action->readiness now also
+  /* No successful-path logging. RMG_RACE_LIGHT_V1 action->readiness also
    * quantifies the cost of this single live syscall-state check. */
   memset(&gate_ctx, 0, sizeof(gate_ctx));
   return __real_sched_setattr_tid(tid, nice_value);
@@ -409,7 +438,8 @@ __attribute__((constructor)) static void czg3_state_gate_banner(void) {
   if (atomic_exchange(&gate_banner_printed, 1) == 0) {
     pr_info("CZG3 FOPS pselect state gate v2 enabled start_timeout_us=%d "
             "late_tolerance_us=%d default_fops_delay_us=%d "
-            "source=RMG_RACE_LIGHT_V1 live_check=syscall zero_delay=refused\n",
+            "manual_live_check=syscall auto_live_check=sigreturn-handshake "
+            "zero_delay=refused\n",
             APP_CZG3_PSELECT_START_TIMEOUT_USEC,
             APP_CZG3_PSELECT_LATE_TOLERANCE_USEC,
             APP_FOPS_ROUTE_COARSE_DELAY_USEC);
