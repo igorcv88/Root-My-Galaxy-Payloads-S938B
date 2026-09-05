@@ -23,10 +23,8 @@ TARGET_HEADER := src/targets/$(TARGET)/target.h
 TARGET_INCLUDE := targets/$(TARGET)/target.h
 TARGET_CC := $(ANDROID_NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$(API)-clang
 
-ifneq ($(MAKECMDGOALS),host-test)
 ifeq ($(wildcard $(TARGET_CC)),)
 $(error set ANDROID_NDK_HOME to an Android NDK containing $(TARGET_CC))
-endif
 endif
 
 PRELOAD := $(OUTDIR)/cve-2026-43499
@@ -37,37 +35,11 @@ APP_RELEASE_SIZE := 104128
 ROOT_HELPER := $(OUTDIR)/cve-2026-43499-root
 TARGET_CFLAGS :=
 APP_RELEASE_OPT := -Oz
-APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s
-APP_RELEASE_EXTRA_CFLAGS :=
-APP_RELEASE_FIXED_SIZE := 1
-CZG3_APP_EXTRA_SRCS :=
-CZG3_RELEASE_EXTRA_SRCS :=
-
-# CZG3 keeps one canonical payload, but production observation happens from
-# the app's sibling observer process. Compile allocator/race instrumentation
-# completely out of the exploit hot path while retaining fail-closed safety.
-ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
-APP_RELEASE_EXTRA_CFLAGS := -DCZG3_EXTERNAL_OBSERVER=1
-APP_RELEASE_FIXED_SIZE := 0
-CZG3_APP_EXTRA_SRCS := src/boot_control.c
-CZG3_RELEASE_EXTRA_SRCS := \
-  src/czg3_pselect_state_gate.c \
-  src/czg3_auto_sigreturn.c \
-  src/czg3_no_syscall_wrap_shim.c
-# Diagnostic isolation experiment: Manual/P0 must call libc syscall() directly,
-# with no linker-wide syscall interposition. Keep the usleep/sched_setattr gates
-# unchanged. The small shim resolves the dormant Auto dispatcher and refuses
-# Auto Root in its constructor before any race can begin; a later experiment
-# will reconnect SIGRETURN at the dedicated Auto-FOPS call site.
-APP_RELEASE_LINK_FLAGS += \
-  -Wl,--wrap=usleep \
-  -Wl,--wrap=sched_setattr_tid
-endif
+APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -s
 
 PRELOAD_SRCS := \
   src/main.c \
   src/util.c \
-  src/czg3_diag.c \
   src/slide.c \
   src/fops.c \
   src/pipe.c \
@@ -75,12 +47,8 @@ PRELOAD_SRCS := \
   src/preload.c
 
 APP_PRELOAD_SRCS := \
-  $(CZG3_APP_EXTRA_SRCS) \
   src/main.c \
   src/util.c \
-  src/czg3_diag.c \
-  src/app_payload_state.c \
-  src/keeper_guard.c \
   src/slide_app.c \
   src/fops.c \
   src/pipe.c \
@@ -95,7 +63,7 @@ APP_PRELOAD_SRCS := \
   src/targets/a53x-A536EXXSNGZG3/page.c
 PRELOAD_SRCS := $(APP_PRELOAD_SRCS)
 APP_RELEASE_OPT := -O2
-APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s
+APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -s
 endif
 
 COMMON_CFLAGS := \
@@ -106,14 +74,7 @@ COMMON_CFLAGS := \
 
 .DEFAULT_GOAL := all
 
-.PHONY: all clean info release stable host-test
-
-host-test:
-	mkdir -p build
-	$(CC) -std=c11 -Wall -Wextra -Werror -Isrc \
-	  tests/test_czg3_diag.c src/czg3_diag.c src/boot_control.c -o build/test_czg3_diag
-	./build/test_czg3_diag
-	! sed -n '/void czg3_prep_begin/,/void czg3_prep_finish/p' src/czg3_diag.c | grep -F 'mmap('
+.PHONY: all clean info release stable
 
 all: $(PRELOAD) $(APP_PRELOAD) $(ROOT_HELPER)
 
@@ -133,21 +94,19 @@ $(ROOT_HELPER): src/su_daemon.c | $(OUTDIR)
 
 $(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_TARGET_CFLAGS) -fPIC $(COMMON_CFLAGS) $(APP_PRELOAD_SRCS) \
-	  -shared -pthread -Wl,--no-undefined -o $@
+	  -shared -pthread -o $@
 
-$(APP_RELEASE): $(CZG3_RELEASE_EXTRA_SRCS) $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
-	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_RELEASE_EXTRA_CFLAGS) $(APP_TARGET_CFLAGS) -fPIC $(APP_RELEASE_OPT) -g0 \
+$(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
+	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_TARGET_CFLAGS) -fPIC $(APP_RELEASE_OPT) -g0 \
 	  -fno-unwind-tables -fno-asynchronous-unwind-tables \
 	  -ffunction-sections -fdata-sections \
-	  -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare \
+	  -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
 	  -Isrc -DTARGET_HEADER='"$(TARGET_INCLUDE)"' \
 	  $(TARGET_CFLAGS) \
-	  $(CZG3_RELEASE_EXTRA_SRCS) $(APP_PRELOAD_SRCS) -shared -pthread \
+	  $(APP_PRELOAD_SRCS) -shared -pthread \
 	  $(APP_RELEASE_LINK_FLAGS) -o $@
-	@if [ "$(APP_RELEASE_FIXED_SIZE)" = "1" ]; then \
-	  test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE); \
-	  truncate -s $(APP_RELEASE_SIZE) $@; \
-	fi
+	@test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE)
+	truncate -s $(APP_RELEASE_SIZE) $@
 
 $(APP_STABLE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 -DAPP_S928_STABLE_RACE=1 \
@@ -158,7 +117,7 @@ $(APP_STABLE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h sr
 	  -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
 	  -Isrc -DTARGET_HEADER='"$(TARGET_INCLUDE)"' \
 	  $(APP_PRELOAD_SRCS) -shared -pthread \
-	  -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s -o $@
+	  -Wl,--gc-sections -Wl,--icf=all -s -o $@
 	@test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE)
 	truncate -s $(APP_RELEASE_SIZE) $@
 
