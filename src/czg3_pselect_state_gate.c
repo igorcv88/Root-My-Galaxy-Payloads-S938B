@@ -23,6 +23,7 @@
 
 extern int __real_usleep(useconds_t usec);
 extern long __real_sched_setattr_tid(int tid, int nice_value);
+extern int czg3_auto_root_invocation_fast;
 
 /* Shared backing for the low-overhead inline telemetry in czg3_diag.h. */
 atomic_uint_fast64_t czg3_light_race_ticks[CZG3_LIGHT_SLOT_COUNT];
@@ -96,6 +97,38 @@ static uint64_t gate_ticks_to_usec(uint64_t ticks, uint64_t frequency) {
   }
   return whole * 1000000ULL +
          (remainder * 1000000ULL) / frequency;
+}
+
+static uint64_t gate_stage_usec(uint64_t begin, uint64_t end,
+                                uint64_t frequency) {
+  if (!begin || !end || end < begin || !frequency) {
+    return 0;
+  }
+  return gate_ticks_to_usec(end - begin, frequency);
+}
+
+/*
+ * A diagnostic print in the successful sub-ms path would itself become a race
+ * variable. Only emit a split when one measured stage is already >5 ms; by
+ * then the anomalous path is established. Counter reads/stores remain the only
+ * added work before sched_setattr returns.
+ */
+static void gate_log_slow_split(const char *mode, int tid, uint64_t frequency,
+                                uint64_t proxy_begin, uint64_t proxy_end,
+                                uint64_t live_begin, uint64_t live_end,
+                                uint64_t sched_begin, uint64_t sched_end) {
+  uint64_t proxy_us = gate_stage_usec(proxy_begin, proxy_end, frequency);
+  uint64_t live_us = gate_stage_usec(live_begin, live_end, frequency);
+  uint64_t sched_us = gate_stage_usec(sched_begin, sched_end, frequency);
+  if (proxy_us <= 5000 && live_us <= 5000 && sched_us <= 5000) {
+    return;
+  }
+  pr_info("RMG_CZG3_GATE_V1|mode=%s|tid=%d|proxy_us=%llu|live_us=%llu|"
+          "real_sched_us=%llu\n",
+          mode, tid,
+          (unsigned long long)proxy_us,
+          (unsigned long long)live_us,
+          (unsigned long long)sched_us);
 }
 
 /* Return 1 for CZG3 FOPS with valid delay metadata, 0 for a non-FOPS route,
@@ -302,7 +335,8 @@ static long gate_skip_trigger(int tid, const char *reason) {
           (unsigned long long)enter,
           (unsigned long long)returned,
           gate_ctx.live_syscall_nr, tid);
-  if (czg3_auto_sigreturn_proxy_active_for_tid(tid)) {
+  if (czg3_auto_root_invocation_fast &&
+      czg3_auto_sigreturn_proxy_active_for_tid(tid)) {
     czg3_auto_sigreturn_sched_complete(tid, -1, EAGAIN);
   }
   memset(&gate_ctx, 0, sizeof(gate_ctx));
@@ -377,11 +411,30 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
     return gate_skip_trigger(tid, "trigger-late");
   }
 
+  uint64_t frequency = gate_ctx.counter_hz;
+  uint64_t proxy_begin = 0;
+  uint64_t proxy_end = 0;
+  int auto_proxy_active = 0;
+
+  /*
+   * Manual FOPS must not call into Auto/SIGRETURN machinery at the mutation
+   * boundary. PR #25 cached the immutable invocation mode for the syscall
+   * wrapper but the state gate still called czg3_auto_sigreturn_*() in Manual.
+   * P0 never enters this gate, matching the device observation that P0 recovered
+   * while Manual FOPS retained the ~40 ms phenotype. Use the cached process flag
+   * as the first branch so Manual cannot execute getenv/strcmp/Auto atomics here.
+   */
+  if (czg3_auto_root_invocation_fast) {
+    proxy_begin = czg3_light_read_counter();
+    auto_proxy_active = czg3_auto_sigreturn_proxy_active_for_tid(tid);
+    proxy_end = czg3_light_read_counter();
+  }
+
   /* Auto Root deliberately has no live pselect syscall at this point. The
    * sigreturn proxy proves the exact waiter TID and frame readiness instead,
    * then atomically hands ownership to this trigger before sched_setattr can
    * enter. Manual/P0 continue through the original exact-TID syscall check. */
-  if (czg3_auto_sigreturn_proxy_active_for_tid(tid)) {
+  if (auto_proxy_active) {
     if (!czg3_auto_sigreturn_frame_ready_for_tid(tid)) {
       gate_ctx.failure = GATE_SIGFRAME_NOT_READY;
       return gate_skip_trigger(tid, "autoroot-sigframe-not-ready");
@@ -391,11 +444,16 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
       return gate_skip_trigger(tid, "autoroot-sigframe-handoff-lost");
     }
 
+    uint64_t sched_begin = czg3_light_read_counter();
     memset(&gate_ctx, 0, sizeof(gate_ctx));
     errno = 0;
     long ret = __real_sched_setattr_tid(tid, nice_value);
     int saved_errno = errno;
+    uint64_t sched_end = czg3_light_read_counter();
     czg3_auto_sigreturn_sched_complete(tid, ret, saved_errno);
+    gate_log_slow_split("auto_root", tid, frequency,
+                        proxy_begin, proxy_end, 0, 0,
+                        sched_begin, sched_end);
     errno = saved_errno;
     return ret;
   }
@@ -403,7 +461,9 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
   /* Manual/P0: one exact-TID live check closes both marker gaps without
    * bringing back the v1 sibling scan/wchan/confirmation loops. If access is
    * denied or the TID is no longer executing pselect6, refuse mutation. */
+  uint64_t live_begin = czg3_light_read_counter();
   gate_ctx.live_syscall_nr = gate_read_task_syscall_nr(tid);
+  uint64_t live_end = czg3_light_read_counter();
   if (gate_ctx.live_syscall_nr != SYS_pselect6) {
     gate_ctx.failure = GATE_NOT_IN_PSELECT;
     return gate_skip_trigger(tid, "live-syscall-not-pselect");
@@ -428,18 +488,24 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
     return gate_skip_trigger(tid, "live-check-made-trigger-late");
   }
 
-  /* No successful-path logging. RMG_RACE_LIGHT_V1 action->readiness also
-   * quantifies the cost of this single live syscall-state check. */
+  uint64_t sched_begin = czg3_light_read_counter();
   memset(&gate_ctx, 0, sizeof(gate_ctx));
-  return __real_sched_setattr_tid(tid, nice_value);
+  long ret = __real_sched_setattr_tid(tid, nice_value);
+  int saved_errno = errno;
+  uint64_t sched_end = czg3_light_read_counter();
+  gate_log_slow_split("manual", tid, frequency,
+                      0, 0, live_begin, live_end,
+                      sched_begin, sched_end);
+  errno = saved_errno;
+  return ret;
 }
 
 __attribute__((constructor)) static void czg3_state_gate_banner(void) {
   if (atomic_exchange(&gate_banner_printed, 1) == 0) {
     pr_info("CZG3 FOPS pselect state gate v2 enabled start_timeout_us=%d "
             "late_tolerance_us=%d default_fops_delay_us=%d "
-            "manual_live_check=syscall auto_live_check=sigreturn-handshake "
-            "zero_delay=refused\n",
+            "manual_live_check=syscall manual_auto_proxy=skipped "
+            "auto_live_check=sigreturn-handshake zero_delay=refused\n",
             APP_CZG3_PSELECT_START_TIMEOUT_USEC,
             APP_CZG3_PSELECT_LATE_TOLERANCE_USEC,
             APP_FOPS_ROUTE_COARSE_DELAY_USEC);
