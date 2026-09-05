@@ -37,7 +37,7 @@ APP_RELEASE_SIZE := 104128
 ROOT_HELPER := $(OUTDIR)/cve-2026-43499-root
 TARGET_CFLAGS :=
 APP_RELEASE_OPT := -Oz
-APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s
+APP_RELEASE_LINK_FLAGS := -Wl,--gc-sections -Wl,--icf=all -s
 
 PRELOAD_SRCS := \
   src/main.c \
@@ -114,14 +114,14 @@ $(OUTDIR):
 
 $(PRELOAD): $(PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -fPIC $(COMMON_CFLAGS) $(PRELOAD_SRCS) \
-	  -shared -pthread -Wl,--no-undefined -o $@
+	  -shared -pthread -o $@
 
 $(ROOT_HELPER): src/su_daemon.c | $(OUTDIR)
 	$(TARGET_CC) -fPIE -pie -O2 -g0 -Wall -Wextra $< -ldl -o $@
 
 $(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_TARGET_CFLAGS) -fPIC $(COMMON_CFLAGS) $(APP_PRELOAD_SRCS) \
-	  -shared -pthread -Wl,--no-undefined -o $@
+	  -shared -pthread -o $@
 
 $(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_TARGET_CFLAGS) -fPIC $(APP_RELEASE_OPT) -g0 \
@@ -144,7 +144,7 @@ $(APP_STABLE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h sr
 	  -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
 	  -Isrc -DTARGET_HEADER='"$(TARGET_INCLUDE)"' \
 	  $(APP_PRELOAD_SRCS) -shared -pthread \
-	  -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s -o $@
+	  -Wl,--gc-sections -Wl,--icf=all -s -o $@
 	@test $$(stat -c %s $@) -le $(APP_RELEASE_SIZE)
 	truncate -s $(APP_RELEASE_SIZE) $@
 
