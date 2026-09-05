@@ -68,7 +68,7 @@ static const char *gate_failure_name(enum gate_failure failure) {
 }
 
 static uint64_t gate_usec_to_ticks(uint64_t usec, uint64_t frequency) {
-  if (!frequency || usec > UINT64_MAX / frequency) {
+  if (!frequency || usec > (UINT64_MAX - 999999ULL) / frequency) {
     return 0;
   }
   uint64_t product = usec * frequency;
@@ -79,7 +79,14 @@ static uint64_t gate_ticks_to_usec(uint64_t ticks, uint64_t frequency) {
   if (!frequency) {
     return UINT64_MAX;
   }
-  return (ticks * 1000000ULL) / frequency;
+  uint64_t whole = ticks / frequency;
+  uint64_t remainder = ticks % frequency;
+  if (whole > UINT64_MAX / 1000000ULL ||
+      remainder > UINT64_MAX / 1000000ULL) {
+    return UINT64_MAX;
+  }
+  return whole * 1000000ULL +
+         (remainder * 1000000ULL) / frequency;
 }
 
 /* Return 1 for CZG3 FOPS with valid delay metadata, 0 for a non-FOPS route,
@@ -203,14 +210,12 @@ static int gate_wait_until_deadline(useconds_t delay_usec) {
 
     uint64_t remaining_usec = gate_ticks_to_usec(
         gate_ctx.deadline_tick - now, gate_ctx.counter_hz);
-    if (remaining_usec > 2000) {
-      /* Sleep most of the remaining interval, then finish with a short yield
-       * loop. This keeps the target anchored to PSELECT_ENTER rather than to
-       * the time spent entering this wrapper. */
-      useconds_t sleep_usec = (useconds_t)(remaining_usec - 1000);
-      if (sleep_usec) {
-        __real_usleep(sleep_usec);
-      }
+    if (remaining_usec > 200) {
+      /* Keep the behavior close to the proven baseline: sleep for the full
+       * remaining interval and use a bounded sub-200 us yield tail only if the
+       * sleep returns early. Overshoot beyond the configured tolerance is
+       * rejected fail-closed below. */
+      __real_usleep((useconds_t)remaining_usec);
     } else {
       __asm__ volatile("yield" ::: "memory");
     }
