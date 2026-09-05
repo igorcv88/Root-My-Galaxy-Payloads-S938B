@@ -53,15 +53,15 @@ CZG3_APP_EXTRA_SRCS := src/boot_control.c
 CZG3_RELEASE_EXTRA_SRCS := \
   src/czg3_pselect_state_gate.c \
   src/czg3_auto_sigreturn.c \
-  src/czg3_syscall_wrap.S
-# The state gate remains release-only and target-local. Manual/P0 still use
-# the established pselect path. Only Auto Root FOPS pselect is intercepted and
-# replaced by a preflighted sigreturn residue writer; all other syscalls tail
-# directly to libc's real syscall entry point.
+  src/czg3_no_syscall_wrap_shim.c
+# Diagnostic isolation experiment: Manual/P0 must call libc syscall() directly,
+# with no linker-wide syscall interposition. Keep the usleep/sched_setattr gates
+# unchanged. The small shim resolves the dormant Auto dispatcher and refuses
+# Auto Root in its constructor before any race can begin; a later experiment
+# will reconnect SIGRETURN at the dedicated Auto-FOPS call site.
 APP_RELEASE_LINK_FLAGS += \
   -Wl,--wrap=usleep \
-  -Wl,--wrap=sched_setattr_tid \
-  -Wl,--wrap=syscall
+  -Wl,--wrap=sched_setattr_tid
 endif
 
 PRELOAD_SRCS := \
