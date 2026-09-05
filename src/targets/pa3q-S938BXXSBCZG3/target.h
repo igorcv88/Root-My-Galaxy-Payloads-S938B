@@ -24,16 +24,26 @@
 #define APP_CZG3_CACHE_GATE_RECLAIM_RETRY 1
 #define PIPE_MAX_ATTEMPTS 2
 #define APP_FOPS_ROUTE_COARSE_DELAY_USEC 60000
-/* CZG3-only low-overhead pselect gate v2.  Keep it independent from
- * APP_REQUIRE_FRESH_P0_SESSION so P0/session layout remains unchanged.  The
+/* CZG3-only low-overhead pselect gate v2. Keep it independent from
+ * APP_REQUIRE_FRESH_P0_SESSION so P0/session layout remains unchanged. The
  * release build reuses the existing RMG_RACE_LIGHT_V1 CNTVCT/atomic markers:
  * the FOPS trigger is anchored to PSELECT_ENTER + the selected coarse delay
  * and is refused if PSELECT_RETURN was already observed or the deadline is
- * missed beyond the bounded tolerance.  No /proc polling occurs in the hot
+ * missed beyond the bounded tolerance. No /proc polling occurs in the hot
  * path and P0 remains outside this experiment. */
 #define APP_CZG3_PSELECT_STATE_GATE 1
 #define APP_CZG3_PSELECT_START_TIMEOUT_USEC 20000
 #define APP_CZG3_PSELECT_LATE_TOLERANCE_USEC 2000
+/* Manual root has repeatedly completed the FOPS sched_setattr transition in
+ * tens of microseconds, while Auto Root in the foreground service group has
+ * blocked until pselect return. Keep the proven Manual/P0 pselect writer and
+ * replace only Auto Root FOPS with the existing arm64 sigreturn stack-residue
+ * primitive. The runtime preflight must prove the signal-frame ABI before the
+ * route is armed; otherwise Auto Root refuses the writer before mutation. */
+#define APP_CZG3_AUTOROOT_SIGRETURN 1
+#define APP_CZG3_SIGRETURN_START_TIMEOUT_USEC 100000
+#define SIGRETURN_FPSIMD_WAITER_OFF 0x18
+#define SIGRETURN_SVE_WAITER_OFF 0x28
 #endif
 #define P0_PAGE_OFFSET 0xffffff8000000000ULL
 #define P0_PHYS_OFFSET 0x80000000ULL

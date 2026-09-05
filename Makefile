@@ -50,11 +50,18 @@ ifeq ($(TARGET),pa3q-S938BXXSBCZG3)
 APP_RELEASE_EXTRA_CFLAGS := -DCZG3_EXTERNAL_OBSERVER=1
 APP_RELEASE_FIXED_SIZE := 0
 CZG3_APP_EXTRA_SRCS := src/boot_control.c
-CZG3_RELEASE_EXTRA_SRCS := src/czg3_pselect_state_gate.c
-# The state-gate experiment is release-only and target-local.  Interpose the
-# existing route delay and sched_setattr trigger without changing slide_app.c
-# or enabling APP_REQUIRE_FRESH_P0_SESSION.
-APP_RELEASE_LINK_FLAGS += -Wl,--wrap=usleep -Wl,--wrap=sched_setattr_tid
+CZG3_RELEASE_EXTRA_SRCS := \
+  src/czg3_pselect_state_gate.c \
+  src/czg3_auto_sigreturn.c \
+  src/czg3_syscall_wrap.S
+# The state gate remains release-only and target-local. Manual/P0 still use
+# the established pselect path. Only Auto Root FOPS pselect is intercepted and
+# replaced by a preflighted sigreturn residue writer; all other syscalls tail
+# directly to libc's real syscall entry point.
+APP_RELEASE_LINK_FLAGS += \
+  -Wl,--wrap=usleep \
+  -Wl,--wrap=sched_setattr_tid \
+  -Wl,--wrap=syscall
 endif
 
 PRELOAD_SRCS := \
