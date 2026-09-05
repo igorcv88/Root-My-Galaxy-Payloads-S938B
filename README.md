@@ -33,7 +33,7 @@ Compared with [upstream Root My Galaxy Payloads](https://github.com/BuSung-dev/R
 - **Exact `SM-S938B / S938BXXSBCZG3` support** for the maintained Galaxy S25 Ultra firmware.
 - **KernelSU 3.3.0**, while upstream payloads are currently based on KernelSU 3.2.5.
 - **SHA-256 verification** for the maintained CZG3 exploit and KernelSU payloads.
-- **Active CZG3 reliability work**, including payload instrumentation used by Root My Galaxy's exploit diagnostics and latency analysis.
+- **A deliberately minimal CZG3 runtime**, restored to the pre-instrumentation exploit path without observer, race telemetry, pselect state gates, or SIGRETURN experiments.
 
 Upstream maintains a broader multi-device catalog. This fork currently focuses its automatic feed on the exact CZG3 profile above.
 

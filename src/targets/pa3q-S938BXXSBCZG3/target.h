@@ -2,11 +2,7 @@
 #define OFFSET_H
 
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
-#if defined(CZG3_RACE_TELEMETRY) && CZG3_RACE_TELEMETRY
-#define BUILD_VARIANT_LABEL "pa3q-S938BXXSBCZG3-app-physical-p0-oracle-race-telemetry"
-#else
 #define BUILD_VARIANT_LABEL "pa3q-S938BXXSBCZG3-app-physical-p0-oracle"
-#endif
 #define APP_PHYS_P0_ORACLE 1
 #else
 #define BUILD_VARIANT_LABEL "pa3q-S938BXXSBCZG3-root-umh"
@@ -16,35 +12,6 @@
 #endif
 
 #define KIMAGE_TEXT_BASE 0xffffffc080000000ULL
-#define APP_CZG3_DIAGNOSTICS 1
-#if defined(APP_PAYLOAD) && APP_PAYLOAD
-/* Two independent CZG3 boots reached verified FOPS but missed the
- * pipe slab cache gate before physrw began. Permit exactly one fresh
- * reclaim at that safe boundary; later stages remain fail-closed. */
-#define APP_CZG3_CACHE_GATE_RECLAIM_RETRY 1
-#define PIPE_MAX_ATTEMPTS 2
-#define APP_FOPS_ROUTE_COARSE_DELAY_USEC 60000
-/* CZG3-only low-overhead pselect gate v2. Keep it independent from
- * APP_REQUIRE_FRESH_P0_SESSION so P0/session layout remains unchanged. The
- * release build reuses the existing RMG_RACE_LIGHT_V1 CNTVCT/atomic markers:
- * the FOPS trigger is anchored to PSELECT_ENTER + the selected coarse delay
- * and is refused if PSELECT_RETURN was already observed or the deadline is
- * missed beyond the bounded tolerance. No /proc polling occurs in the hot
- * path and P0 remains outside this experiment. */
-#define APP_CZG3_PSELECT_STATE_GATE 1
-#define APP_CZG3_PSELECT_START_TIMEOUT_USEC 20000
-#define APP_CZG3_PSELECT_LATE_TOLERANCE_USEC 2000
-/* Manual root has repeatedly completed the FOPS sched_setattr transition in
- * tens of microseconds, while Auto Root in the foreground service group has
- * blocked until pselect return. Keep the proven Manual/P0 pselect writer and
- * replace only Auto Root FOPS with the existing arm64 sigreturn stack-residue
- * primitive. The runtime preflight must prove the signal-frame ABI before the
- * route is armed; otherwise Auto Root refuses the writer before mutation. */
-#define APP_CZG3_AUTOROOT_SIGRETURN 1
-#define APP_CZG3_SIGRETURN_START_TIMEOUT_USEC 100000
-#define SIGRETURN_FPSIMD_WAITER_OFF 0x18
-#define SIGRETURN_SVE_WAITER_OFF 0x28
-#endif
 #define P0_PAGE_OFFSET 0xffffff8000000000ULL
 #define P0_PHYS_OFFSET 0x80000000ULL
 #define P0_KERNEL_PHYS_LOAD 0xa8000000ULL
