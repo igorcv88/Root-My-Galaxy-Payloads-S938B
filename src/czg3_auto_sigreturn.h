@@ -8,7 +8,7 @@
 int czg3_auto_sigreturn_enabled(void);
 int czg3_auto_sigreturn_proxy_active_for_tid(int tid);
 int czg3_auto_sigreturn_frame_ready_for_tid(int tid);
-void czg3_auto_sigreturn_sched_started(int tid);
+int czg3_auto_sigreturn_sched_started(int tid);
 void czg3_auto_sigreturn_sched_complete(int tid, long ret, int saved_errno);
 
 long czg3_auto_pselect_dispatch(long number, long nfds, long readfds,
@@ -26,7 +26,10 @@ static inline int czg3_auto_sigreturn_frame_ready_for_tid(int tid) {
   (void)tid;
   return 0;
 }
-static inline void czg3_auto_sigreturn_sched_started(int tid) { (void)tid; }
+static inline int czg3_auto_sigreturn_sched_started(int tid) {
+  (void)tid;
+  return 0;
+}
 static inline void czg3_auto_sigreturn_sched_complete(int tid, long ret,
                                                        int saved_errno) {
   (void)tid;
