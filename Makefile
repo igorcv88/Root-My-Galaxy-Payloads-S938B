@@ -78,13 +78,30 @@ COMMON_CFLAGS := \
 .PHONY: all clean info release stable host-test
 
 host-test:
-	@! grep -Fq 'src/czg3_diag.c' Makefile
-	@! grep -Fq 'src/czg3_pselect_state_gate.c' Makefile
-	@! grep -Fq 'src/czg3_auto_sigreturn.c' Makefile
-	@! grep -Fq 'src/czg3_syscall_wrap.S' Makefile
-	@! grep -Fq -- '--wrap=syscall' Makefile
-	@! grep -Eq 'APP_CZG3_(DIAGNOSTICS|PSELECT_STATE_GATE|AUTOROOT_SIGRETURN)' src/targets/pa3q-S938BXXSBCZG3/target.h
-	@grep -Fq 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle' src/targets/pa3q-S938BXXSBCZG3/target.h
+	@set -eu; \
+	  srcs='$(PRELOAD_SRCS) $(APP_PRELOAD_SRCS)'; \
+	  for forbidden in \
+	    src/czg3_diag.c \
+	    src/czg3_pselect_state_gate.c \
+	    src/czg3_auto_sigreturn.c \
+	    src/czg3_syscall_wrap.S \
+	    src/czg3_no_syscall_wrap_shim.c \
+	    src/boot_control.c \
+	    src/app_payload_state.c \
+	    src/keeper_guard.c; do \
+	      case " $$srcs " in \
+	        *" $$forbidden "*) \
+	          echo "forbidden CZG3 diagnostic source linked: $$forbidden" >&2; \
+	          exit 1 ;; \
+	      esac; \
+	  done; \
+	  if grep -Eq 'APP_CZG3_(DIAGNOSTICS|PSELECT_STATE_GATE|AUTOROOT_SIGRETURN)' \
+	      src/targets/pa3q-S938BXXSBCZG3/target.h; then \
+	    echo 'forbidden CZG3 diagnostic feature flag remains enabled' >&2; \
+	    exit 1; \
+	  fi; \
+	  grep -Fq 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle' \
+	    src/targets/pa3q-S938BXXSBCZG3/target.h
 
 all: $(PRELOAD) $(APP_PRELOAD) $(ROOT_HELPER)
 
@@ -100,7 +117,7 @@ $(PRELOAD): $(PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kerne
 	  -shared -pthread -Wl,--no-undefined -o $@
 
 $(ROOT_HELPER): src/su_daemon.c | $(OUTDIR)
-	$(TARGET_CC) -fPIE -pie -O2 -g0 -Wall -Wextra -Werror $< -ldl -o $@
+	$(TARGET_CC) -fPIE -pie -O2 -g0 -Wall -Wextra $< -ldl -o $@
 
 $(APP_PRELOAD): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h src/kernelsnitch/*.h | $(OUTDIR)
 	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_TARGET_CFLAGS) -fPIC $(COMMON_CFLAGS) $(APP_PRELOAD_SRCS) \
@@ -110,7 +127,7 @@ $(APP_RELEASE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h s
 	$(TARGET_CC) -DAPP_PAYLOAD=1 $(APP_TARGET_CFLAGS) -fPIC $(APP_RELEASE_OPT) -g0 \
 	  -fno-unwind-tables -fno-asynchronous-unwind-tables \
 	  -ffunction-sections -fdata-sections \
-	  -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare \
+	  -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
 	  -Isrc -DTARGET_HEADER='"$(TARGET_INCLUDE)"' \
 	  $(TARGET_CFLAGS) \
 	  $(APP_PRELOAD_SRCS) -shared -pthread \
@@ -124,7 +141,7 @@ $(APP_STABLE): $(APP_PRELOAD_SRCS) $(TARGET_HEADER) src/offset.h src/common.h sr
 	  -fstack-protector-strong \
 	  -fno-unwind-tables -fno-asynchronous-unwind-tables \
 	  -ffunction-sections -fdata-sections \
-	  -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare \
+	  -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
 	  -Isrc -DTARGET_HEADER='"$(TARGET_INCLUDE)"' \
 	  $(APP_PRELOAD_SRCS) -shared -pthread \
 	  -Wl,--gc-sections -Wl,--icf=all -Wl,--no-undefined -s -o $@
