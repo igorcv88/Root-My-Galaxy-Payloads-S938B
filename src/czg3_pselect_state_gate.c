@@ -13,10 +13,12 @@
  *
  * v2 reuses the existing production RMG_RACE_LIGHT_V1 state that slide_app.c
  * already records with CNTVCT_EL0 + relaxed atomic stores. PSELECT_ENTER is the
- * timing origin and PSELECT_RETURN doubles as the active-state marker. No /proc
- * reads, directory scans, or success-path logging are performed in the hot
- * path. P0 remains outside this interposer because the light race state is only
- * enabled for the FOPS oracle route.
+ * timing origin and PSELECT_RETURN bounds an observed return. No /proc reads,
+ * directory scans, or success-path logging are performed in the default hot
+ * path. Because PSELECT_ENTER is necessarily emitted just before the syscall,
+ * a zero-delay route cannot prove that the waiter has entered the kernel and is
+ * therefore rejected fail-closed. P0 remains outside this interposer because
+ * the light race state is only enabled for the FOPS oracle route.
  */
 
 extern int __real_usleep(useconds_t usec);
@@ -284,15 +286,22 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
     return gate_skip_trigger(tid, "bad-delay-metadata");
   }
 
+  /* PSELECT_ENTER is emitted immediately before SYS_pselect6. With no positive
+   * separation, a preemption between marker and syscall cannot be excluded.
+   * Reject zero rather than silently turning a timing marker into an unsafe
+   * active-state assertion. */
+  if (effective_delay == 0) {
+    memset(&gate_ctx, 0, sizeof(gate_ctx));
+    gate_ctx.active = 1;
+    gate_ctx.effective_delay_usec = 0;
+    gate_ctx.failure = GATE_NO_PSELECT_ENTER;
+    return gate_skip_trigger(tid, "zero-delay-unprovable");
+  }
+
   if (!gate_ctx.active) {
-    if (effective_delay != 0) {
-      gate_ctx.effective_delay_usec = effective_delay;
-      gate_ctx.failure = GATE_NO_PSELECT_ENTER;
-      return gate_skip_trigger(tid, "unarmed");
-    }
-    /* slide_wait_before_consume() intentionally omits usleep(0), so zero-delay
-     * uses the same marker-based arm path here. */
-    (void)gate_wait_until_deadline(0);
+    gate_ctx.effective_delay_usec = effective_delay;
+    gate_ctx.failure = GATE_NO_PSELECT_ENTER;
+    return gate_skip_trigger(tid, "unarmed");
   }
 
   if (gate_ctx.effective_delay_usec != effective_delay) {
@@ -337,7 +346,7 @@ __attribute__((constructor)) static void czg3_state_gate_banner(void) {
   if (atomic_exchange(&gate_banner_printed, 1) == 0) {
     pr_info("CZG3 FOPS pselect state gate v2 enabled start_timeout_us=%d "
             "late_tolerance_us=%d default_fops_delay_us=%d "
-            "source=RMG_RACE_LIGHT_V1\n",
+            "source=RMG_RACE_LIGHT_V1 zero_delay=refused\n",
             APP_CZG3_PSELECT_START_TIMEOUT_USEC,
             APP_CZG3_PSELECT_LATE_TOLERANCE_USEC,
             APP_FOPS_ROUTE_COARSE_DELAY_USEC);
