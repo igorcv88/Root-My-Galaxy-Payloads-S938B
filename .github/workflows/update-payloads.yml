@@ -1,0 +1,270 @@
+name: Atualizar Payloads
+
+on:
+  workflow_dispatch:
+    inputs:
+      atualizar:
+        description: "O que você alterou?"
+        required: true
+        default: "Exploit"
+        type: choice
+        options:
+          - "Exploit"
+          - "KernelSU"
+          - "Exploit + KernelSU"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-payloads
+  cancel-in-progress: false
+
+env:
+  TARGET: pa3q-S938BXXSBCZG3
+  TARGET_RELEASE: 6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k
+  KSU_REPO: https://github.com/tiann/KernelSU.git
+  KSU_TAG_SHA: 932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e
+  MODULE_NAME: android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
+  KSUD_NAME: ksud-s25u-kdp-v3.3.0
+
+jobs:
+  update:
+    name: Gerar e publicar arquivos
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UPDATE_MODE: ${{ inputs.atualizar }}
+
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Preparar Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r29
+
+      - name: Testar código do exploit
+        if: contains(inputs.atualizar, 'Exploit')
+        run: make host-test
+
+      - name: Gerar exploit CZG3 canônico
+        if: contains(inputs.atualizar, 'Exploit')
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          make clean
+          make TARGET="$TARGET" ANDROID_NDK_HOME="$ANDROID_NDK_HOME" release
+          payload="build/$TARGET/cve-2026-43499-app.release.so"
+          test -s "$payload"
+          grep -aFq 'RMG_BOOT_V1' "$payload"
+          grep -aFq 'pa3q-S938BXXSBCZG3-app-physical-p0-oracle' "$payload"
+          for marker in RMG_RACE_V1 RMG_SCHED_V1 RMG_SYS_V1 RMG_PREP_V1 RMG_PREP_CHECKPOINT_V1 RMG_DIAG_V1; do
+            if grep -aFq "$marker" "$payload"; then
+              echo "Unexpected in-band diagnostic marker in production payload: $marker" >&2
+              exit 1
+            fi
+          done
+
+      - name: Preparar KernelSU
+        if: contains(inputs.atualizar, 'KernelSU')
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/KernelSU"
+          git clone --filter=blob:none "$KSU_REPO" "$RUNNER_TEMP/KernelSU"
+          cd "$RUNNER_TEMP/KernelSU"
+          git checkout --detach "$KSU_TAG_SHA"
+          test "$(git rev-parse HEAD)" = "$KSU_TAG_SHA"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
+          git apply "$GITHUB_WORKSPACE/kernelsu/patches/KernelSU-v3.3.0-samsung-kdp-rkp-defex.patch"
+          python3 "$GITHUB_WORKSPACE/kernelsu/patches/apply-v330-staged-daemon-hotfix.py"
+
+      - name: Gerar módulo KernelSU CZG3
+        if: contains(inputs.atualizar, 'KernelSU')
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/ylarod/ddk-min:android15-6.6-20260828
+          docker run --rm --privileged \
+            -v "$RUNNER_TEMP/KernelSU:/work/KernelSU" \
+            -e TARGET_RELEASE="$TARGET_RELEASE" \
+            ghcr.io/ylarod/ddk-min:android15-6.6-20260828 \
+            bash -lc '
+              set -euo pipefail
+              git config --global --add safe.directory /work/KernelSU
+              cd /work/KernelSU
+              test -n "${KDIR:-}"
+              test -d "$KDIR"
+              mkdir -p "$KDIR/include/config" "$KDIR/include/generated"
+              printf "%s\n" "$TARGET_RELEASE" > "$KDIR/include/config/kernel.release"
+              printf "#define UTS_RELEASE \"%s\"\n" "$TARGET_RELEASE" > "$KDIR/include/generated/utsrelease.h"
+              cd kernel
+              make clean || true
+              CONFIG_KSU=m \
+              CONFIG_KSU_SAMSUNG_KDP=y \
+              CONFIG_KSU_SAMSUNG_RKP=y \
+              CONFIG_KSU_SAMSUNG_DEFEX=y \
+              CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y \
+              CC=clang make -j"$(nproc)"
+              llvm-strip -d kernelsu.ko
+            '
+          test -s "$RUNNER_TEMP/KernelSU/kernel/kernelsu.ko"
+          cp "$RUNNER_TEMP/KernelSU/kernel/kernelsu.ko" "kernelsu/$MODULE_NAME"
+
+      - name: Gerar ksud CZG3
+        if: contains(inputs.atualizar, 'KernelSU')
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-linux-android
+          cd "$RUNNER_TEMP/KernelSU"
+          test "$((30000 + $(git rev-list --count HEAD)))" -eq 32601
+          mkdir -p userspace/ksud/bin/aarch64
+          cp "$GITHUB_WORKSPACE/kernelsu/$MODULE_NAME" \
+             userspace/ksud/bin/aarch64/android15-6.6_kernelsu.ko
+          source .github/scripts/setup-rust-build.sh aarch64-linux-android 26
+          cargo clean -p ksud
+          cargo build --target "$TRIPLE" --release --manifest-path ./userspace/ksud/Cargo.toml
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp "target/$TRIPLE/release/ksud" "$GITHUB_WORKSPACE/out/$KSUD_NAME"
+          test -s "$GITHUB_WORKSPACE/out/$KSUD_NAME"
+          strings "$GITHUB_WORKSPACE/out/$KSUD_NAME" | grep -F '32601' | head -n 1
+
+      - name: Atualizar arquivo canônico e hashes
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import shutil
+          import urllib.parse
+
+          root = pathlib.Path.cwd()
+          manifest_path = root / "support/targets-v3.json"
+          legacy_manifest_path = root / "support/targets-v2.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          legacy_manifest = json.loads(legacy_manifest_path.read_text(encoding="utf-8"))
+          matches = [
+              item for item in manifest.get("payloads", [])
+              if item.get("payloadId") == "pa3q-S938BXXSBCZG3"
+          ]
+          if len(matches) != 1:
+              raise SystemExit("CZG3 payload must exist exactly once")
+          legacy_matches = [
+              item for item in legacy_manifest.get("targets", [])
+              if item.get("profileId") == "pa3q-S938BXXSBCZG3"
+          ]
+          if len(legacy_matches) != 1:
+              raise SystemExit("CZG3 legacy target must exist exactly once")
+          target = matches[0]
+          legacy_target = legacy_matches[0]
+          prefix = (
+              "https://raw.githubusercontent.com/igorcv88/"
+              "Root-My-Galaxy-Payloads-S938B/main/"
+          )
+          canonical_exploit = (
+              root / "artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so"
+          )
+          canonical_exploit_url = prefix + canonical_exploit.relative_to(root).as_posix()
+          mode = os.environ["UPDATE_MODE"]
+
+          def destination(url: str) -> pathlib.Path:
+              if not url.startswith(prefix):
+                  raise SystemExit(f"Unexpected artifact URL: {url}")
+              return root / urllib.parse.unquote(url.removeprefix(prefix))
+
+          def metadata(path: pathlib.Path) -> tuple[int, str]:
+              data = path.read_bytes()
+              return len(data), hashlib.sha256(data).hexdigest()
+
+          if "Exploit" in mode:
+              source = root / "build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.release.so"
+              canonical_exploit.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, canonical_exploit)
+              size, digest = metadata(canonical_exploit)
+              target["exploit"]["url"] = canonical_exploit_url
+              target["exploit"]["size"] = size
+              target["exploit"]["sha256"] = digest
+              legacy_target["exploit"]["url"] = canonical_exploit_url
+              legacy_target["exploit"]["size"] = size
+              print(
+                  f"Exploit: {canonical_exploit.relative_to(root)} "
+                  f"({size} bytes, {digest})"
+              )
+
+          if "KernelSU" in mode:
+              source = root / "out/ksud-s25u-kdp-v3.3.0"
+              dest = destination(target["kernelsu"]["url"])
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, dest)
+              size, digest = metadata(dest)
+              target["kernelsu"]["size"] = size
+              target["kernelsu"]["sha256"] = digest
+              print(f"KernelSU: {dest.relative_to(root)} ({size} bytes, {digest})")
+
+              module = root / "kernelsu/android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko"
+              module_size, module_digest = metadata(module)
+              readme_path = root / "kernelsu/README.md"
+              readme = readme_path.read_text(encoding="utf-8")
+              import re
+              block = re.compile(
+                  r"android15-6\.6_kernelsu-s25u-kdp-v3\.3\.0\.ko\n"
+                  r"size: \d+\nSHA-256: [0-9a-f]{64}\n\n"
+                  r"ksud-s25u-kdp-v3\.3\.0\n"
+                  r"size: \d+\nSHA-256: [0-9a-f]{64}"
+              )
+              replacement = (
+                  "android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko\n"
+                  f"size: {module_size}\nSHA-256: {module_digest}\n\n"
+                  "ksud-s25u-kdp-v3.3.0\n"
+                  f"size: {size}\nSHA-256: {digest}"
+              )
+              readme, count = block.subn(replacement, readme, count=1)
+              if count != 1:
+                  raise SystemExit(
+                      "Could not update KernelSU artifact metadata in kernelsu/README.md"
+                  )
+              readme_path.write_text(readme, encoding="utf-8")
+
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          legacy_manifest_path.write_text(
+              json.dumps(legacy_manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Verificar resultado
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/validate_feed.py
+          git diff --check
+
+      - name: Publicar no repositório
+        run: |
+          set -euo pipefail
+          git config user.name "Root My Galaxy"
+          git config user.email "root-my-galaxy@users.noreply.github.com"
+
+          git add support/targets-v2.json
+          git add support/targets-v3.json
+          git add artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
+          git add kernelsu/android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
+          git add kernelsu/ksud-s25u-kdp-v3.3.0
+          git add kernelsu/README.md
+
+          if git diff --cached --quiet; then
+            echo "Nenhum arquivo mudou. Nada para publicar."
+            exit 0
+          fi
+
+          git commit -m "Update CZG3 payloads: $UPDATE_MODE"
+          git push origin HEAD:main
