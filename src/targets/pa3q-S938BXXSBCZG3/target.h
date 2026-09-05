@@ -24,15 +24,16 @@
 #define APP_CZG3_CACHE_GATE_RECLAIM_RETRY 1
 #define PIPE_MAX_ATTEMPTS 2
 #define APP_FOPS_ROUTE_COARSE_DELAY_USEC 60000
-/* Experimental CZG3-only pselect state gate.  Keep it independent from
- * APP_REQUIRE_FRESH_P0_SESSION: that switch changes P0/session layout and is
- * intentionally not part of this experiment.  The release build interposes
- * only the route delay and sched_setattr trigger, requiring pselect6/do_select
- * before the existing delay and again immediately before the trigger. */
+/* CZG3-only low-overhead pselect gate v2.  Keep it independent from
+ * APP_REQUIRE_FRESH_P0_SESSION so P0/session layout remains unchanged.  The
+ * release build reuses the existing RMG_RACE_LIGHT_V1 CNTVCT/atomic markers:
+ * the FOPS trigger is anchored to PSELECT_ENTER + the selected coarse delay
+ * and is refused if PSELECT_RETURN was already observed or the deadline is
+ * missed beyond the bounded tolerance.  No /proc polling occurs in the hot
+ * path and P0 remains outside this experiment. */
 #define APP_CZG3_PSELECT_STATE_GATE 1
-#define APP_CZG3_PSELECT_READY_TIMEOUT_USEC 20000
-#define APP_CZG3_PSELECT_RECHECK_TIMEOUT_USEC 20000
-#define APP_CZG3_PSELECT_WCHAN_CONFIRMATIONS 3
+#define APP_CZG3_PSELECT_START_TIMEOUT_USEC 20000
+#define APP_CZG3_PSELECT_LATE_TOLERANCE_USEC 2000
 #endif
 #define P0_PAGE_OFFSET 0xffffff8000000000ULL
 #define P0_PHYS_OFFSET 0x80000000ULL

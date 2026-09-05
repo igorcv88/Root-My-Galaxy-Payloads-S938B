@@ -200,6 +200,10 @@ void czg3_race_thread_snapshot(const char *phase,
  * receives no counter reads.  A tracked FOPS event adds one CNTVCT read plus
  * one relaxed atomic store.  Formatting and I/O happen only after the writer
  * route has completed.
+ *
+ * The CZG3 low-overhead pselect gate v2 intentionally shares this exact timing
+ * state with its release-only interposer.  Other builds keep the original
+ * translation-unit-local storage.
  */
 extern uintptr_t slide_oracle_parent;
 extern uintptr_t slide_oracle_target;
@@ -217,10 +221,16 @@ enum czg3_light_race_slot {
   CZG3_LIGHT_SLOT_COUNT
 };
 
+#if defined(APP_CZG3_PSELECT_STATE_GATE) && APP_CZG3_PSELECT_STATE_GATE
+extern atomic_uint_fast64_t czg3_light_race_ticks[CZG3_LIGHT_SLOT_COUNT];
+extern atomic_int czg3_light_race_attempt;
+extern atomic_int czg3_light_race_enabled;
+#else
 static atomic_uint_fast64_t czg3_light_race_ticks[CZG3_LIGHT_SLOT_COUNT]
     __attribute__((unused));
 static atomic_int czg3_light_race_attempt __attribute__((unused));
 static atomic_int czg3_light_race_enabled __attribute__((unused));
+#endif
 
 static inline uint64_t czg3_light_read_counter(void) {
   uint64_t value;
