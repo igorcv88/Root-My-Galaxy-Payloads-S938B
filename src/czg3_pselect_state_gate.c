@@ -6,19 +6,19 @@
 /*
  * CZG3 FOPS pselect gate v2.
  *
- * The first gate used /proc/self/task/<tid>/{syscall,wchan} polling before and
- * after the selected FOPS delay. Device logs showed that pselect6/do_select did
- * not distinguish winning from losing FOPS states and the polling itself moved
- * the action roughly 0.5-0.7 ms later.
+ * The first gate enumerated sibling tasks and repeatedly sampled both syscall
+ * and wchan before and after the selected FOPS delay. Device logs showed that
+ * pselect6/do_select did not distinguish winning from losing FOPS states and
+ * the repeated /proc work moved the action roughly 0.5-0.7 ms later.
  *
  * v2 reuses the existing production RMG_RACE_LIGHT_V1 state that slide_app.c
- * already records with CNTVCT_EL0 + relaxed atomic stores. PSELECT_ENTER is the
- * timing origin and PSELECT_RETURN bounds an observed return. No /proc reads,
- * directory scans, or success-path logging are performed in the default hot
- * path. Because PSELECT_ENTER is necessarily emitted just before the syscall,
- * a zero-delay route cannot prove that the waiter has entered the kernel and is
- * therefore rejected fail-closed. P0 remains outside this interposer because
- * the light race state is only enabled for the FOPS oracle route.
+ * already records with CNTVCT_EL0 + relaxed atomic stores to anchor timing at
+ * PSELECT_ENTER. Immediately before mutation it performs one exact-TID syscall
+ * read to close the marker-before-entry / marker-after-exit gaps; there is no
+ * task enumeration, wchan read, confirmation loop, or success-path logging.
+ * A zero-delay route remains refused fail-closed because it has no positive
+ * separation between the pre-syscall marker and the requested trigger. P0 is
+ * outside this interposer because light race state is enabled only for FOPS.
  */
 
 extern int __real_usleep(useconds_t usec);
@@ -34,7 +34,8 @@ enum gate_failure {
   GATE_BAD_COUNTER,
   GATE_NO_PSELECT_ENTER,
   GATE_PSELECT_RETURNED,
-  GATE_TRIGGER_LATE
+  GATE_TRIGGER_LATE,
+  GATE_NOT_IN_PSELECT
 };
 
 struct czg3_pselect_gate_ctx {
@@ -47,6 +48,7 @@ struct czg3_pselect_gate_ctx {
   uint64_t deadline_tick;
   uint64_t ready_wait_usec;
   uint64_t deadline_late_usec;
+  long live_syscall_nr;
 };
 
 static _Thread_local struct czg3_pselect_gate_ctx gate_ctx;
@@ -64,6 +66,8 @@ static const char *gate_failure_name(enum gate_failure failure) {
       return "pselect-returned";
     case GATE_TRIGGER_LATE:
       return "trigger-late";
+    case GATE_NOT_IN_PSELECT:
+      return "not-in-pselect";
     default:
       return "unknown";
   }
@@ -127,6 +131,33 @@ static uint64_t gate_load_tick(enum czg3_light_race_slot slot) {
                               memory_order_relaxed);
 }
 
+static long gate_read_task_syscall_nr(int tid) {
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/self/task/%d/syscall", tid);
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return -1;
+  }
+
+  char buf[128];
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  int saved_errno = errno;
+  close(fd);
+  errno = saved_errno;
+  if (n <= 0) {
+    return -1;
+  }
+  buf[n] = 0;
+
+  char *end = NULL;
+  errno = 0;
+  long nr = strtol(buf, &end, 0);
+  if (errno || end == buf) {
+    return -1;
+  }
+  return nr;
+}
+
 static int gate_wait_for_pselect_enter(uint64_t frequency,
                                        uint64_t *enter_tick,
                                        uint64_t *wait_usec) {
@@ -168,6 +199,7 @@ static int gate_wait_until_deadline(useconds_t delay_usec) {
   gate_ctx.active = 1;
   gate_ctx.effective_delay_usec = delay_usec;
   gate_ctx.failure = GATE_BAD_COUNTER;
+  gate_ctx.live_syscall_nr = -1;
   gate_ctx.counter_hz = czg3_light_read_frequency();
   if (!gate_ctx.counter_hz) {
     return 0;
@@ -213,10 +245,9 @@ static int gate_wait_until_deadline(useconds_t delay_usec) {
     uint64_t remaining_usec = gate_ticks_to_usec(
         gate_ctx.deadline_tick - now, gate_ctx.counter_hz);
     if (remaining_usec > 200) {
-      /* Keep the behavior close to the proven baseline: sleep for the full
+      /* Keep behavior close to the proven baseline: sleep for the full
        * remaining interval and use a bounded sub-200 us yield tail only if the
-       * sleep returns early. Overshoot beyond the configured tolerance is
-       * rejected fail-closed below. */
+       * sleep returns early. Overshoot beyond tolerance is refused below. */
       __real_usleep((useconds_t)remaining_usec);
     } else {
       __asm__ volatile("yield" ::: "memory");
@@ -259,7 +290,7 @@ static long gate_skip_trigger(int tid, const char *reason) {
   pr_info("slide fops pselect state gate v2 trigger=skipped reason=%s "
           "gate_failure=%s delay_usec=%u ready_wait_usec=%llu "
           "late_usec=%llu pselect_age_usec=%llu enter=%llu return=%llu "
-          "call_tid=%d\n",
+          "live_syscall_nr=%ld call_tid=%d\n",
           reason, gate_failure_name(gate_ctx.failure),
           (unsigned int)gate_ctx.effective_delay_usec,
           (unsigned long long)gate_ctx.ready_wait_usec,
@@ -267,7 +298,7 @@ static long gate_skip_trigger(int tid, const char *reason) {
           (unsigned long long)age_usec,
           (unsigned long long)enter,
           (unsigned long long)returned,
-          tid);
+          gate_ctx.live_syscall_nr, tid);
   memset(&gate_ctx, 0, sizeof(gate_ctx));
   errno = EAGAIN;
   return -1;
@@ -282,6 +313,7 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
   if (fops_route < 0) {
     memset(&gate_ctx, 0, sizeof(gate_ctx));
     gate_ctx.active = 1;
+    gate_ctx.live_syscall_nr = -1;
     gate_ctx.failure = GATE_BAD_COUNTER;
     return gate_skip_trigger(tid, "bad-delay-metadata");
   }
@@ -294,12 +326,16 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
     memset(&gate_ctx, 0, sizeof(gate_ctx));
     gate_ctx.active = 1;
     gate_ctx.effective_delay_usec = 0;
+    gate_ctx.live_syscall_nr = -1;
     gate_ctx.failure = GATE_NO_PSELECT_ENTER;
     return gate_skip_trigger(tid, "zero-delay-unprovable");
   }
 
   if (!gate_ctx.active) {
+    memset(&gate_ctx, 0, sizeof(gate_ctx));
+    gate_ctx.active = 1;
     gate_ctx.effective_delay_usec = effective_delay;
+    gate_ctx.live_syscall_nr = -1;
     gate_ctx.failure = GATE_NO_PSELECT_ENTER;
     return gate_skip_trigger(tid, "unarmed");
   }
@@ -335,9 +371,36 @@ long __wrap_sched_setattr_tid(int tid, int nice_value) {
     return gate_skip_trigger(tid, "trigger-late");
   }
 
-  /* No success-path logging. At this point the hot-path work added by v2 is
-   * only atomic marker loads plus CNTVCT reads; the existing telemetry records
-   * the real sched_setattr completion afterward. */
+  /* One exact-TID live check closes both marker gaps without bringing back the
+   * v1 sibling scan/wchan/confirmation loops. If access is denied or the TID is
+   * no longer executing pselect6, refuse mutation. */
+  gate_ctx.live_syscall_nr = gate_read_task_syscall_nr(tid);
+  if (gate_ctx.live_syscall_nr != SYS_pselect6) {
+    gate_ctx.failure = GATE_NOT_IN_PSELECT;
+    return gate_skip_trigger(tid, "live-syscall-not-pselect");
+  }
+
+  /* The live read itself consumed time. Re-check both return marker and bounded
+   * lateness after it so the check cannot push a valid route outside policy. */
+  if (gate_load_tick(CZG3_LIGHT_PSELECT_RETURN)) {
+    gate_ctx.failure = GATE_PSELECT_RETURNED;
+    return gate_skip_trigger(tid, "pselect-returned-after-live-check");
+  }
+  now = czg3_light_read_counter();
+  if (!now || now < gate_ctx.deadline_tick) {
+    gate_ctx.failure = GATE_BAD_COUNTER;
+    return gate_skip_trigger(tid, "counter-invalid-after-live-check");
+  }
+  late_usec = gate_ticks_to_usec(
+      now - gate_ctx.deadline_tick, gate_ctx.counter_hz);
+  if (late_usec > APP_CZG3_PSELECT_LATE_TOLERANCE_USEC) {
+    gate_ctx.deadline_late_usec = late_usec;
+    gate_ctx.failure = GATE_TRIGGER_LATE;
+    return gate_skip_trigger(tid, "live-check-made-trigger-late");
+  }
+
+  /* No successful-path logging. RMG_RACE_LIGHT_V1 action->readiness now also
+   * quantifies the cost of this single live syscall-state check. */
   memset(&gate_ctx, 0, sizeof(gate_ctx));
   return __real_sched_setattr_tid(tid, nice_value);
 }
@@ -346,7 +409,7 @@ __attribute__((constructor)) static void czg3_state_gate_banner(void) {
   if (atomic_exchange(&gate_banner_printed, 1) == 0) {
     pr_info("CZG3 FOPS pselect state gate v2 enabled start_timeout_us=%d "
             "late_tolerance_us=%d default_fops_delay_us=%d "
-            "source=RMG_RACE_LIGHT_V1 zero_delay=refused\n",
+            "source=RMG_RACE_LIGHT_V1 live_check=syscall zero_delay=refused\n",
             APP_CZG3_PSELECT_START_TIMEOUT_USEC,
             APP_CZG3_PSELECT_LATE_TOLERANCE_USEC,
             APP_FOPS_ROUTE_COARSE_DELAY_USEC);
