@@ -430,15 +430,26 @@ long czg3_auto_pselect_dispatch(long number, long nfds, long readfds,
   int completed = wait_for_sched_result(&sched_ret, &sched_errno);
 
   /* Mutation is either complete or never started before we issue any further
-   * waiter-thread syscall. */
-  int restore_ok = sigaction(SIGUSR2, &old_action, NULL) == 0;
+   * waiter-thread syscall. A handler-restore error after a successful
+   * sched_setattr must not be converted into a clean miss: mutation may already
+   * have occurred, so preserve the triggered outcome and only report the
+   * post-mutation cleanup problem diagnostically. */
+  errno = 0;
+  int restore_ret = sigaction(SIGUSR2, &old_action, NULL);
+  int restore_errno = errno;
   atomic_store_explicit(&sigreturn_phase, CZG3_SIGRETURN_INACTIVE,
                         memory_order_release);
   atomic_store_explicit(&sigreturn_waiter_tid, 0, memory_order_release);
 
-  if (!completed || !restore_ok || sched_ret != 0) {
+  if (!completed || sched_ret != 0) {
     errno = completed && sched_errno ? sched_errno : EAGAIN;
     return -1;
+  }
+
+  if (restore_ret != 0) {
+    pr_warning("CZG3 Auto Root SIGUSR2 restore failed after writer success "
+               "errno=%d; preserving triggered outcome\n",
+               restore_errno);
   }
 
   errno = 0;
