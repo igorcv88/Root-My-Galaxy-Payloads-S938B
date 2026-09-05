@@ -1,72 +1,87 @@
-# Root My Galaxy Payloads — SM-S938B
+<p align="center">
+  <img src=".github/assets/root-my-galaxy-payloads-banner.svg" alt="Root My Galaxy Payloads" width="100%" />
+</p>
 
-This repository is the controlled payload feed for [`igorcv88/Root-My-Galaxy-S938B`](https://github.com/igorcv88/Root-My-Galaxy-S938B).
+<p align="center">
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest"><img alt="App release" src="https://img.shields.io/github/v/release/igorcv88/Root-My-Galaxy-S938B?label=app" /></a>
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/igorcv88/Root-My-Galaxy-S938B/total" /></a>
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B/stargazers"><img alt="Stars" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Figorcv88%2FRoot-My-Galaxy-Payloads-S938B&amp;query=%24.stargazers_count&amp;label=stars&amp;logo=github&amp;labelColor=555&amp;color=2f81f7&amp;style=flat" /></a>
+  <img alt="Firmware" src="https://img.shields.io/badge/firmware-S938BXXSBCZG3-59636e" />
+  <img alt="KernelSU" src="https://img.shields.io/badge/KernelSU-3.3.0-2f81f7" />
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B/actions/workflows/update-payloads.yml"><img alt="Payload build" src="https://img.shields.io/github/actions/workflow/status/igorcv88/Root-My-Galaxy-Payloads-S938B/update-payloads.yml?branch=main&amp;label=payloads" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/igorcv88/Root-My-Galaxy-Payloads-S938B" /></a>
+</p>
 
-Its exploit infrastructure is synchronized with [`BuSung-dev/Root-My-Galaxy-Payloads`](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads), while the application feed remains deliberately restricted to the exact validated Galaxy S25 Ultra firmware used by this fork.
+<p align="center">
+  <strong>Payload and firmware-profile repository used by Root My Galaxy.</strong>
+</p>
 
-## Executable feed profile
+<p align="center">
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B">Root My Galaxy app</a>
+  ·
+  <a href="https://github.com/BuSung-dev/Root-My-Galaxy-Payloads">Upstream payloads</a>
+  ·
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest">Latest APK</a>
+</p>
 
-`support/targets-v3.json` exposes one fail-closed profile:
+This repository contains the firmware profile, native exploit code and executable payloads maintained for the Root My Galaxy fork. If you only want to root the phone, install the APK from [Root My Galaxy](https://github.com/igorcv88/Root-My-Galaxy-S938B); these files do not need to be downloaded manually.
 
-```text
-Payload ID:   pa3q-S938BXXSBCZG3
-Model:        SM-S938B
-Device:       pa3q
-Build:        BP4A.251205.006.S938BXXSBCZG3
-Fingerprint:  samsung/pa3qxxx/pa3q:16/BP4A.251205.006/S938BXXSBCZG3_OXMBCZG3:user/release-keys
-Kernel:       6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k
-uname -v:     #1 SMP PREEMPT Thu Jul  2 00:48:56 UTC 2026
-Machine:      aarch64
-SDK / ABI:    36 / arm64-v8a
-Page size:    4096
-```
+## Why this fork?
 
-The exact target source is under `src/targets/pa3q-S938BXXSBCZG3/`. Its CZG3 P0 fingerprint table is not byte-identical to the S938N CZF1 table, so the shared upstream S25 profile is not substituted for this exact target.
+Compared with [upstream Root My Galaxy Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads), this fork currently adds:
 
-## Legacy v2 compatibility
+- **Exact `SM-S938B / S938BXXSBCZG3` support** for the maintained Galaxy S25 Ultra firmware.
+- **KernelSU 3.3.0**, while upstream payloads are currently based on KernelSU 3.2.5.
+- **SHA-256 verification** for the maintained CZG3 exploit and KernelSU payloads.
+- **A deliberately minimal CZG3 runtime**, restored to the pre-instrumentation exploit path without observer, race telemetry, pselect state gates, or SIGRETURN experiments.
 
-`support/targets-v2.json` is intentionally retained for already released versions of the S938B app. It contains only the exact CZG3 profile and continues to reference the previously hardware-validated exploit:
+Upstream maintains a broader multi-device catalog. This fork currently focuses its automatic feed on the exact CZG3 profile above.
 
-```text
-artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
-  size:    104128
-  sha256:  ba0894d1214e3c46305d8acb0ab065eb110833b4b9973c9250aca5bfcb98c214
-```
+## Current profile
 
-That path must not be replaced by a newly rebuilt payload. The validation workflow checks its SHA-256 even though the legacy v2 manifest itself predates hash fields.
+| | Configuration |
+| --- | --- |
+| Device | Samsung Galaxy S25 Ultra `SM-S938B` (`pa3q`) |
+| Firmware | `S938BXXSBCZG3` |
+| Android | Android 16 / API 36 |
+| Kernel | `6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k` |
+| ABI | `arm64-v8a` |
+| Page size | 4K |
 
-## v3 synchronized payload
+A firmware or kernel update can invalidate the exploit profile.
 
-The v3 app uses a separate artifact rebuilt from the exact CZG3 target against the synchronized upstream exploit source:
+## What this repository provides
 
-```text
-artifacts/pa3q-S938BXXSBCZG3-v0265/cve-2026-43499-app.so
-  size:    104128
-  sha256:  1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303
+- **Firmware profile and target data** — exact compatibility identity plus the target-specific exploit offsets/configuration.
+- **Exploit source and compiled payload** — the app-domain CVE-2026-43499 implementation used to acquire temporary bootstrap root.
+- **Bootstrap helper** — native helper code used by the exploit/root handoff.
+- **KernelSU payload** — the Samsung-specific late-load module and `ksud` build used after bootstrap root is available.
+- **Support feed** — the manifest consumed by Root My Galaxy.
 
-kernelsu/ksud-s25u-kdp
-  size:    6407096
-  sha256:  fa3edcc7d168637394877b30cb1f909d762dda788ec14051f4ae79edd6562d63
-```
+The current app feed is stored in `support/targets-v3.json`. CZG3 executable entries include expected size and SHA-256 metadata.
 
-The v3 feed includes size and SHA-256 for every executable artifact. The application resolves this repository's current commit first, then rewrites all manifest artifact URLs to that immutable commit before downloading them.
+## How Root My Galaxy uses the payloads
 
-The `Validate payload feed` workflow rejects external URLs, missing files, size/hash mismatches, identity drift, changes to the legacy hardware-validated payload, or accidental collapse of the v2 and v3 generations.
+During a manual installation, Root My Galaxy resolves the payload repository to a commit, downloads the matching manifest and files from that immutable revision, and verifies them before execution.
 
-## Upstream synchronization
+After a successful root, Auto Root keeps the verified working set locally. Publishing a newer payload does not break that existing Auto Root setup; a new set only replaces it after it has also completed a successful manual root on the device.
 
-The repository also keeps the current upstream exploit source, target infrastructure, KernelSU build material, and additional device research. Those additional sources are not automatically eligible for execution by the S938B application feed unless explicitly added to the controlled manifest with exact identity and hashes.
+## Root lifetime
 
-## Build
+KernelSU is late-loaded for the current kernel boot. No boot image is flashed or modified. A full reboot returns the phone to its stock boot state, and Root My Galaxy can restore root through Auto Root.
 
-For the S938B target:
+## Integrity
 
-```sh
-make TARGET=pa3q-S938BXXSBCZG3 ANDROID_NDK_HOME=/path/to/android-ndk release
-```
+The maintained CZG3 profile uses exact device identity plus size and SHA-256 checks for the executable payloads. If the device or files do not match the expected profile, Root My Galaxy stops instead of treating them as compatible.
 
-Outputs are generated under `build/pa3q-S938BXXSBCZG3/`.
+The older v2 profile remains available for compatibility with previously released app versions.
 
-The firmware analysis and target derivation are recorded in [`docs/SM-S938B-S938BXXSBCZG3.md`](docs/SM-S938B-S938BXXSBCZG3.md). General upstream-derived porting material remains under `docs/` and `kernelsu/`.
+## Technical documentation
 
-Use only on devices you own or are explicitly authorized to test.
+- [Support feed and matching rules](support/README.md)
+- [Firmware-to-profile porting procedure](docs/PORTING.md)
+- [Samsung KernelSU late-load builds](kernelsu/README.md)
+
+## License and credits
+
+This repository is distributed under the license in [LICENSE](LICENSE). It is derived from [BuSung-dev/Root-My-Galaxy-Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads); the exploit port is based on the published [NebuSec/CyberMeowfia CVE-2026-43499 source](https://github.com/NebuSec/CyberMeowfia/tree/main/IonStack/CVE-2026-43499/exploit), and the late-load root payload uses [KernelSU](https://github.com/tiann/KernelSU).
