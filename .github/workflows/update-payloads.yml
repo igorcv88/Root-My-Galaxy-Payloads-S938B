@@ -27,6 +27,7 @@ env:
   KSU_TAG_SHA: 932014ab5b2c9b74a3d11e2ec4d17dd10fc9442e
   MODULE_NAME: android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
   KSUD_NAME: ksud-s25u-kdp-v3.3.0
+  RESTORED_EXPLOIT_SHA256: 1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303
 
 jobs:
   update:
@@ -53,7 +54,7 @@ jobs:
         if: contains(inputs.atualizar, 'Exploit')
         run: make host-test
 
-      - name: Gerar exploit CZG3 canônico
+      - name: Gerar exploit CZG3 restaurado
         if: contains(inputs.atualizar, 'Exploit')
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -73,6 +74,13 @@ jobs:
               exit 1
             fi
           done
+          actual_sha="$(sha256sum "$payload" | awk '{print $1}')"
+          if [[ "$actual_sha" != "$RESTORED_EXPLOIT_SHA256" ]]; then
+            echo "Restored source did not reproduce the pinned v0265 payload." >&2
+            echo "expected=$RESTORED_EXPLOIT_SHA256" >&2
+            echo "actual=$actual_sha" >&2
+            exit 1
+          fi
 
       - name: Preparar KernelSU
         if: contains(inputs.atualizar, 'KernelSU')
@@ -138,7 +146,7 @@ jobs:
           test -s "$GITHUB_WORKSPACE/out/$KSUD_NAME"
           strings "$GITHUB_WORKSPACE/out/$KSUD_NAME" | grep -F '32601' | head -n 1
 
-      - name: Atualizar arquivo canônico e hashes
+      - name: Atualizar artefatos v3 e hashes
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -172,10 +180,15 @@ jobs:
               "https://raw.githubusercontent.com/igorcv88/"
               "Root-My-Galaxy-Payloads-S938B/main/"
           )
-          canonical_exploit = (
-              root / "artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so"
+          legacy_exploit_url = (
+              prefix + "artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so"
           )
-          canonical_exploit_url = prefix + canonical_exploit.relative_to(root).as_posix()
+          if legacy_target["exploit"]["url"] != legacy_exploit_url:
+              raise SystemExit("legacy v2 exploit path drifted")
+          restored_exploit = (
+              root / "artifacts/pa3q-S938BXXSBCZG3-v0265/cve-2026-43499-app.so"
+          )
+          restored_exploit_url = prefix + restored_exploit.relative_to(root).as_posix()
           mode = os.environ["UPDATE_MODE"]
 
           def destination(url: str) -> pathlib.Path:
@@ -189,16 +202,14 @@ jobs:
 
           if "Exploit" in mode:
               source = root / "build/pa3q-S938BXXSBCZG3/cve-2026-43499-app.release.so"
-              canonical_exploit.parent.mkdir(parents=True, exist_ok=True)
-              shutil.copy2(source, canonical_exploit)
-              size, digest = metadata(canonical_exploit)
-              target["exploit"]["url"] = canonical_exploit_url
+              restored_exploit.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, restored_exploit)
+              size, digest = metadata(restored_exploit)
+              target["exploit"]["url"] = restored_exploit_url
               target["exploit"]["size"] = size
               target["exploit"]["sha256"] = digest
-              legacy_target["exploit"]["url"] = canonical_exploit_url
-              legacy_target["exploit"]["size"] = size
               print(
-                  f"Exploit: {canonical_exploit.relative_to(root)} "
+                  f"Exploit v3: {restored_exploit.relative_to(root)} "
                   f"({size} bytes, {digest})"
               )
 
@@ -239,9 +250,6 @@ jobs:
           manifest_path.write_text(
               json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
           )
-          legacy_manifest_path.write_text(
-              json.dumps(legacy_manifest, indent=2) + "\n", encoding="utf-8"
-          )
           PY
 
       - name: Verificar resultado
@@ -256,9 +264,8 @@ jobs:
           git config user.name "Root My Galaxy"
           git config user.email "root-my-galaxy@users.noreply.github.com"
 
-          git add support/targets-v2.json
           git add support/targets-v3.json
-          git add artifacts/pa3q-S938BXXSBCZG3/cve-2026-43499-app.so
+          git add artifacts/pa3q-S938BXXSBCZG3-v0265/cve-2026-43499-app.so
           git add kernelsu/android15-6.6_kernelsu-s25u-kdp-v3.3.0.ko
           git add kernelsu/ksud-s25u-kdp-v3.3.0
           git add kernelsu/README.md
